@@ -20,6 +20,7 @@ def read_motor_angle(card):
             alpha = count * 2*math.pi / 2048.0
             alpha_deg = alpha * 180/math.pi
 
+            print(f"motor radian = {alpha:+.1f} rad")
             print(f"motor α = {alpha_deg:+.1f} °")
             time.sleep(0.5)
 
