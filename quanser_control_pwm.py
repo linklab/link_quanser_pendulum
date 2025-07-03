@@ -50,11 +50,11 @@ def reset(card):
     try:
         print("======RESET======")
         # ① 모터 초기화 설정
-        # card.set_card_specific_options("pwm_en=1", MAX_STRING_LENGTH)
-        # input_channels = array('I', [1])
-        # output_channels = array('I', [0])
-        # card.set_digital_directions(input_channels, len(input_channels), output_channels, len(output_channels))
-        # card.write_digital(array('I',[0]),1,array('I',[1]))  # 앰프 ON
+        card.set_card_specific_options("pwm_en=1", MAX_STRING_LENGTH)
+        input_channels = array('I', [1])
+        output_channels = array('I', [0])
+        card.set_digital_directions(input_channels, len(input_channels), output_channels, len(output_channels))
+        card.write_digital(array('I',[0]),1,array('I',[1]))  # 앰프 ON
 
         # ② 채널 설정
         pwm_ch  = array('I', [0])
@@ -83,8 +83,9 @@ def reset(card):
             alpha = count * 2 * math.pi / 2048.0
 
             # 허용 오차 이내로 reset시키면 즉시 reset 종료
-            if abs(alpha) < tolerance:
-                break
+            # if abs(alpha) < tolerance:
+            #     print("IMMEDIATE END")
+            #     break
             # 각속도 추정 (Finite difference)
             omega = (alpha - prev_alpha) / Ts
             prev_alpha = alpha

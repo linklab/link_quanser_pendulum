@@ -32,7 +32,7 @@ class QuanserEnv(VecEnv):
         self.step_count = 0
 
         # for PID control
-        self.Kp = 0.08
+        self.Kp = 0.09
         self.Kd = 0.005
         self.prev_motor_angle = None
 
@@ -40,7 +40,7 @@ class QuanserEnv(VecEnv):
         enc_val = array('l', [0])
         self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
         self.init_count = enc_val[0]
-
+        print(f"SET INIT COUNT: {self.init_count}")
     def observation_space(self):
         pass
 
@@ -64,10 +64,54 @@ class QuanserEnv(VecEnv):
         return motor_angle, pendulum_angle # (rad, rad)
 
     def reset(self):
-        reset(self.card)
         self.step_count = 0
+        try:
+            print("\n======RESET======")
+            # ③ PD 제어 파라미터
+            duration = 20.0  # 제어 시간 (초) 10초 동안 reset할 시간 주어줌
+            tolerance = 0.1 # (radian) 허용 오차 이내로 reset시키면 즉시 reset 종료
+            steps = int(duration / self.Ts)
+
+            init_val = array('l', [0])
+            self.card.read_encoder(self.motor_enc_ch, 1, init_val)
+            prev_error = (self.init_count - init_val[0]) * 2 * math.pi / 2048.0
+
+            start = time.time()
+            # ④ 제어 루프
+            for i in range(steps):
+                # 현재 각도 읽기
+                enc_val = array('l', [0])
+                self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
+                count = self.init_count - enc_val[0]  # target_angle - current_angle
+                error = count * 2 * math.pi / 2048.0
+
+                # 허용 오차 이내로 reset시키면 즉시 reset 종료
+                # if abs(error) < tolerance:
+                #     print("IMMEDIATE END")
+                #     break
+                # 각속도 추정 (Finite difference)
+                omega = (error - prev_error) / self.Ts
+                prev_error = error
+
+                # PD 제어
+                duty = self.Kp * error + self.Kd * omega  # p_gain * angle + d_gain * angular_vel
+                duty = max(min(duty, 0.3), -0.3)  # PWM 제한 [-0.1, +0.1]
+
+                # 현재 모터 각도, 현재 모터 각속도, 현재 duty 값 출력
+                if i % 5 == 0:
+                    print(f"error = {math.degrees(error):+.2f} deg, omega = {omega:.1f} rad/s, duty = {duty:+.3f}")
+                self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
+                time.sleep(self.Ts)
+            print(f"Reset time: {time.time() - start:.2f} sec")
+
+
+        finally:
+            # 모터 정지 및 앰프 OFF
+            self.card.write_pwm(array('I', [0]), 1, array('d', [0.0]))
+            # reset 제대로 못하면?
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+        self.step_count += 1
         # interpret action as target motor angle [rad]
         target_angle = float(actions.item())
 
@@ -100,7 +144,6 @@ class QuanserEnv(VecEnv):
         terminated = abs(math.degrees(motor_angle)) > 130.0
 
         # truncation: max steps reached
-        self.step_count += 1
         truncated = self.step_count >= self.max_steps
 
         # done flag

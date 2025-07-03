@@ -75,26 +75,30 @@ class DDPG:
         for n_episode in range(1, self.max_num_episodes + 1):
             episode_reward = 0
 
-            # self.env.reset()
+            self.env.reset()
             # observation = self.env.get_init_observations()
 
             done = False
 
+            print("======EPISODE START====== ")
             while not done:
-                self.time_steps += 1
+                # self.time_steps += 1
                 batch_size = 32
                 # action = torch.empty(batch_size).uniform_(-1.0, 1.0) # batch random
                 action = torch.empty(1).uniform_(-1.0, 1.0)
+                # action = torch.zeros(1)
                 # action = self.actor.get_action(observation)
 
                 next_observation, reward, dones, info = self.env.step(action)
-                print(f"random action: {action}")
-                print(f"next_obs: {next_observation}")
-                print(f"reward: {reward}")
-                print(f"dones: {dones}")
-                print(f"info: {info}")
-                print()
-
+                # print(f"random action: {action}")
+                # print(f"next_obs: {next_observation}")
+                # print(f"reward: {reward}")
+                # print(f"dones: {dones}")
+                # print(f"info: {info}")
+                # print()
+                if self.env.step_count % 100 == 0:
+                    print("======EPISODE END====== ")
+                    break
                 # done = dones
 
             #     episode_reward += reward
@@ -149,9 +153,9 @@ class DDPG:
             #             )
             #     break
 
-        total_training_time = time.time() - self.total_train_start_time
-        total_training_time = time.strftime("%H:%M:%S", time.gmtime(total_training_time))
-        print("Total Training End : {}".format(total_training_time))
+        # total_training_time = time.time() - self.total_train_start_time
+        # total_training_time = time.strftime("%H:%M:%S", time.gmtime(total_training_time))
+        # print("Total Training End : {}".format(total_training_time))
         if self.use_wandb:
             self.wandb.finish()
 
