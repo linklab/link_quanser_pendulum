@@ -3,6 +3,7 @@ from array   import array
 import time
 import math
 import torch
+import numpy as np
 
 from dummy_env import VecEnv
 from quanser_control_pwm import reset
@@ -11,6 +12,7 @@ class QuanserEnv(VecEnv):
     def __init__(self, env, card):
         self.env = env # unwrapped env는 gymnasium "Pendulum-v1"
         self.card = card
+
 
         # PWM 모드 켜기
         self.card.set_card_specific_options("pwm_en=1", MAX_STRING_LENGTH)        # 필수! :contentReference[oaicite:8]{index=8}
@@ -25,6 +27,9 @@ class QuanserEnv(VecEnv):
         self.pwm_ch = array('I', [0])
         self.motor_enc_ch = array('I', [0])
         self.pend_enc_ch = array('I', [1])
+
+        # LED channels
+        self.led_channels = np.array([11000, 11001, 11002], dtype=np.uint32)
 
         # control params
         self.Ts = 0.1            # control timestep [s]
@@ -76,8 +81,13 @@ class QuanserEnv(VecEnv):
         self.step_count = 0
         self.prev_motor_angle = None
         self.prev_pend_angle = None
+
         try:
             print("\n======RESET======")
+            # # Reset LED blue
+            # blue_led_values = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            # self.card.write_other(self.led_channels, len(self.led_channels), blue_led_values)
+
             # ③ PD 제어 파라미터
             duration = 20.0  # 제어 시간 (초) 10초 동안 reset할 시간 주어줌
             tolerance = 0.1 # (radian) 허용 오차 이내로 reset시키면 즉시 reset 종료
@@ -123,6 +133,10 @@ class QuanserEnv(VecEnv):
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         self.step_count += 1
+
+        # # Step LED Red
+        # red_led_values = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        # self.card.write_other(self.led_channels, len(self.led_channels), red_led_values)
         # interpret action as target motor angle [rad]
         target_angle = float(actions.item())
 
@@ -164,6 +178,11 @@ class QuanserEnv(VecEnv):
         # reward: -(theta^2 + 0.1 * gamma^2)
         reward_val = -(theta ** 2 + 0.1 * (gamma ** 2))
         reward = torch.tensor(reward_val, dtype=torch.float32)
+
+        # # Success LED Green
+        # if reward.item() > -0.01:
+        #     green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        #     self.card.write_other(self.led_channels, len(self.led_channels), green_led_values)
 
         # termination: motor angle exceeds ±130°
         terminated = abs(math.degrees(motor_angle)) > 130.0
