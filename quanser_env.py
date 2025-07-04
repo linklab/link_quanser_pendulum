@@ -34,13 +34,20 @@ class QuanserEnv(VecEnv):
         # for PID control
         self.Kp = 0.09
         self.Kd = 0.005
+
+        # for estimate angular velocity
         self.prev_motor_angle = None
+        self.prev_pend_angle = None
 
         # get initial motor count
         enc_val = array('l', [0])
         self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
         self.init_count = enc_val[0]
         print(f"SET INIT COUNT: {self.init_count}")
+
+        # initialize pendulum degree
+        zero_ct = array('l', [0])
+        self.card.set_encoder_counts(self.pend_enc_ch, len(self.pend_enc_ch), zero_ct)
     def observation_space(self):
         pass
 
@@ -56,7 +63,9 @@ class QuanserEnv(VecEnv):
     def _get_pendulum_angle(self):
         enc_val = array('l', [0])
         self.card.read_encoder(self.pend_enc_ch, 1, enc_val)
-        return enc_val[0] * 2 * math.pi / 2048.0 # radian
+        raw_angle = enc_val[0] * 2 * math.pi / 2048.0
+        angle = ((raw_angle + math.pi) % (2 * math.pi)) - math.pi
+        return angle  # radian [-π, π], 6 o'clock: 0 radian
 
     def get_init_observations(self):
         motor_angle = self._get_motor_angle()
@@ -65,6 +74,8 @@ class QuanserEnv(VecEnv):
 
     def reset(self):
         self.step_count = 0
+        self.prev_motor_angle = None
+        self.prev_pend_angle = None
         try:
             print("\n======RESET======")
             # ③ PD 제어 파라미터
@@ -135,10 +146,24 @@ class QuanserEnv(VecEnv):
         # read observations from hardware
         motor_angle = self._get_motor_angle()
         pend_angle = self._get_pendulum_angle()
+
         next_obs = torch.tensor([motor_angle, pend_angle], dtype=torch.float32)
 
-        # TODO
-        reward = torch.tensor(0.0, dtype=torch.float32)
+        # estimate pendulum angular velocity
+        gamma = 0.0
+        if self.prev_pend_angle is not None:
+            raw_diff = pend_angle - self.prev_pend_angle
+            # shortest angular difference [-π, π]
+            delta_p = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
+            gamma = delta_p / self.Ts
+        self.prev_pend_angle = pend_angle
+
+        raw_diff = pend_angle - math.pi
+        theta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
+
+        # reward: -(theta^2 + 0.1 * gamma^2)
+        reward_val = -(theta ** 2 + 0.1 * (gamma ** 2))
+        reward = torch.tensor(reward_val, dtype=torch.float32)
 
         # termination: motor angle exceeds ±130°
         terminated = abs(math.degrees(motor_angle)) > 130.0

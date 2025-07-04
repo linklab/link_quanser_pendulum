@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from a_actor_and_q_critic import MODEL_DIR, Actor, QCritic, ReplayBuffer, Transition
+from actor_and_q_critic import MODEL_DIR, Actor, QCritic, ReplayBuffer, Transition
 
 import wandb
 
@@ -47,13 +47,13 @@ class DDPG:
         self.soft_update_tau = config["soft_update_tau"]
         self.replay_buffer_size = config["replay_buffer_size"]
         """
-        self.actor = Actor(n_features=3, n_actions=1)
-        self.target_actor = Actor(n_features=3, n_actions=1)
+        self.actor = Actor(n_features=2, n_actions=1)  # n_features: (motor_angle, pendulum_angle), shape: (2,)
+        self.target_actor = Actor(n_features=2, n_actions=1)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
 
-        self.q_critic = QCritic(n_features=3, n_actions=1)
-        self.target_q_critic = QCritic(n_features=3, n_actions=1)
+        self.q_critic = QCritic(n_features=2, n_actions=1)
+        self.target_q_critic = QCritic(n_features=2, n_actions=1)
         self.target_q_critic.load_state_dict(self.q_critic.state_dict())
         self.q_critic_optimizer = optim.Adam(self.q_critic.parameters(), lr=self.learning_rate)
 
@@ -82,36 +82,36 @@ class DDPG:
 
             print("======EPISODE START====== ")
             while not done:
-                # self.time_steps += 1
-                batch_size = 32
+                self.time_steps += 1
+                # batch_size = 32
                 # action = torch.empty(batch_size).uniform_(-1.0, 1.0) # batch random
-                action = torch.empty(1).uniform_(-1.0, 1.0)
-                # action = torch.zeros(1)
+                # action = torch.empty(1).uniform_(-1.0, 1.0)
+                action = torch.zeros(1)
                 # action = self.actor.get_action(observation)
 
                 next_observation, reward, dones, info = self.env.step(action)
                 # print(f"random action: {action}")
-                # print(f"next_obs: {next_observation}")
-                # print(f"reward: {reward}")
+                print(f"next_obs: {next_observation}")
+                print(f"reward: {reward:.2f}")
+                print()
                 # print(f"dones: {dones}")
                 # print(f"info: {info}")
                 # print()
-                if self.env.step_count % 100 == 0:
+                if self.env.step_count % 300 == 0:
                     print("======EPISODE END====== ")
                     break
+
+                # episode_reward += reward
+
+                # transition = Transition(observation, action, next_observation, reward, dones)
+
+                # self.replay_buffer.append(transition)
+
+                # observation = next_observation
                 # done = dones
 
-            #     episode_reward += reward
-
-            #     transition = Transition(observation, action, next_observation, reward, terminated)
-
-            #     self.replay_buffer.append(transition)
-
-            #     observation = next_observation
-            #     done = terminated or truncated
-
-            #     if self.time_steps % self.steps_between_train == 0 and self.time_steps > self.batch_size:
-            #         policy_loss, critic_loss, mu_v = self.train()
+                # if self.time_steps % self.steps_between_train == 0 and self.time_steps > self.batch_size:
+                #     policy_loss, critic_loss, mu_v = self.train()
 
             #     if self.time_steps % self.validation_time_steps_interval == 0:
             #         validation_episode_reward_lst, validation_episode_reward_avg = self.validate()
