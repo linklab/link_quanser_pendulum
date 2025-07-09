@@ -45,6 +45,9 @@ class QuanserEnv(gym.Env):
         self.prev_motor_angle = None
         self.prev_pend_angle = None
 
+        # for last action observation
+        self.last_action = 0.0 # radian
+
         # get initial motor count
         enc_val = array('l', [0])
         self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
@@ -76,15 +79,37 @@ class QuanserEnv(gym.Env):
         angle = ((raw_angle + math.pi) % (2 * math.pi)) - math.pi
         return angle  # radian [-π, π], 6 o'clock: 0 radian
 
+    def _get_motor_velocity(self, current):
+        if self.prev_motor_angle is None:
+            omega = 0.0
+        else:
+            omega = (current - self.prev_motor_angle) / self.Ts
+        self.prev_motor_angle = current
+        return omega
+
+    def _get_pendulum_velocity(self, current):
+        if self.prev_pend_angle is None:
+            gamma = 0.0
+        else:
+            raw_diff = current - self.prev_pend_angle
+            delta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
+            gamma = delta / self.Ts
+        self.prev_pend_angle = current
+        return gamma
+
     def get_init_observations(self):
         motor_angle = self._get_motor_angle()
         pendulum_angle = self._get_pendulum_angle()
-        return motor_angle, pendulum_angle # (rad, rad)
+        motor_angle_vel = self._get_motor_velocity(motor_angle)
+        pendulum_angle_vel = self._get_pendulum_velocity(pendulum_angle)
+        last_action = self.last_action
+        return motor_angle, pendulum_angle, motor_angle_vel, pendulum_angle_vel, last_action # (rad, rad, rad/s, rad/s, rad)
 
     def reset(self):
         self.step_count = 0
         self.prev_motor_angle = None
         self.prev_pend_angle = None
+        self.last_action = 0.0
 
         try:
             print("\n======RESET======")
@@ -146,15 +171,16 @@ class QuanserEnv(gym.Env):
         # red_led_values = np.array([1.0, 0.0, 0.0], dtype=np.float64)
         # self.card.write_other(self.led_channels, len(self.led_channels), red_led_values)
         # interpret action as target motor angle [rad]
+
+        # =========================ACT=========================
         target_angle = float(actions.item())
+
+        self.last_action = target_angle
 
         # read current motor angle
         current_angle = self._get_motor_angle()
         # estimate angular velocity
-        omega = 0.0
-        if self.prev_motor_angle is not None:
-            omega = (current_angle - self.prev_motor_angle) / self.Ts
-        self.prev_motor_angle = current_angle
+        omega = self._get_motor_velocity(current=current_angle)
 
         # PD position control to compute PWM duty
         error = target_angle - current_angle
@@ -162,23 +188,19 @@ class QuanserEnv(gym.Env):
         duty = max(min(duty, 0.1), -0.1)
         self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
 
+
         # wait for control period
         time.sleep(self.Ts)
+        # ==================================================
 
         # read observations from hardware
         motor_angle = self._get_motor_angle()
         pend_angle = self._get_pendulum_angle()
-
-        next_obs = torch.tensor([motor_angle, pend_angle], dtype=torch.float32)
+        next_omega = self._get_motor_velocity(current=motor_angle)
+        gamma = self._get_pendulum_velocity(current=pend_angle)
+        next_obs = torch.tensor([motor_angle, pend_angle, next_omega, gamma, self.last_action], dtype=torch.float32)
 
         # estimate pendulum angular velocity
-        gamma = 0.0
-        if self.prev_pend_angle is not None:
-            raw_diff = pend_angle - self.prev_pend_angle
-            # shortest angular difference [-π, π]
-            delta_p = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
-            gamma = delta_p / self.Ts
-        self.prev_pend_angle = pend_angle
 
         raw_diff = pend_angle - math.pi
         theta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi

@@ -90,14 +90,14 @@ class DDPG:
                 # action = self.actor.get_action(observation)
 
                 next_observation, reward, dones, info = self.env.step(action)
-                # print(f"random action: {action}")
-                # print(f"next_obs: {next_observation}")
+                print(f"random action: {action}")
+                print(f"next_obs: {next_observation}")
                 # print(f"reward: {reward:.2f}")
                 # print()
                 # print(f"dones: {dones}")
                 # print(f"info: {info}")
                 # print()
-                if self.env.step_count % 100 == 0:
+                if self.env.step_count % 200 == 0:
                     print("======EPISODE END====== ")
                     break
 
