@@ -4,13 +4,14 @@ import time
 import math
 import torch
 import numpy as np
+import gymnasium as gym
 
 from dummy_env import VecEnv
 from quanser_control_pwm import reset
 
-class QuanserEnv(VecEnv):
-    def __init__(self, env, card):
-        self.env = env # unwrapped env는 gymnasium "Pendulum-v1"
+class QuanserEnv(gym.Env):
+    def __init__(self, card):
+        # self.env = env # unwrapped env는 gymnasium "Pendulum-v1"
         self.card = card
 
 
@@ -32,7 +33,7 @@ class QuanserEnv(VecEnv):
         self.led_channels = np.array([11000, 11001, 11002], dtype=np.uint32)
 
         # control params
-        self.Ts = 0.1            # control timestep [s]
+        self.Ts = 0.02            # control timestep [s]
         self.max_steps = 1000    # after 1000 steps, truncate
         self.step_count = 0
 
@@ -53,6 +54,9 @@ class QuanserEnv(VecEnv):
         # initialize pendulum degree
         zero_ct = array('l', [0])
         self.card.set_encoder_counts(self.pend_enc_ch, len(self.pend_enc_ch), zero_ct)
+
+        self.step_time = time.time()
+
     def observation_space(self):
         pass
 
@@ -90,7 +94,8 @@ class QuanserEnv(VecEnv):
 
             # ③ PD 제어 파라미터
             duration = 20.0  # 제어 시간 (초) 10초 동안 reset할 시간 주어줌
-            tolerance = 0.1 # (radian) 허용 오차 이내로 reset시키면 즉시 reset 종료
+            ang_tolerance = 10.0 # (degree) 절댓값 10도 이내로 reset시키면 즉시 reset 종료
+            ang_vel_tolerance = 0.1 # (rad/s) 각속도 0.1 이내로 reset시키면 즉시 reset 종료
             steps = int(duration / self.Ts)
 
             init_val = array('l', [0])
@@ -106,13 +111,14 @@ class QuanserEnv(VecEnv):
                 count = self.init_count - enc_val[0]  # target_angle - current_angle
                 error = count * 2 * math.pi / 2048.0
 
-                # 허용 오차 이내로 reset시키면 즉시 reset 종료
-                # if abs(error) < tolerance:
-                #     print("IMMEDIATE END")
-                #     break
                 # 각속도 추정 (Finite difference)
                 omega = (error - prev_error) / self.Ts
                 prev_error = error
+
+                # 허용 오차 이내로 reset시키면 즉시 reset 종료
+                if abs(math.degrees(error)) < ang_tolerance and abs(omega) < ang_vel_tolerance:
+                    print("======RESET COMPLETE======")
+                    break
 
                 # PD 제어
                 duty = self.Kp * error + self.Kd * omega  # p_gain * angle + d_gain * angular_vel
@@ -132,6 +138,8 @@ class QuanserEnv(VecEnv):
             # reset 제대로 못하면?
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+        # print("step_time: ", time.time() - self.step_time)
+        self.step_time = time.time()
         self.step_count += 1
 
         # # Step LED Red

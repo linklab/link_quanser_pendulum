@@ -85,19 +85,19 @@ class DDPG:
                 self.time_steps += 1
                 # batch_size = 32
                 # action = torch.empty(batch_size).uniform_(-1.0, 1.0) # batch random
-                # action = torch.empty(1).uniform_(-1.0, 1.0)
-                action = torch.zeros(1)
+                action = torch.empty(1).uniform_(-1.0, 1.0)
+                # action = torch.zeros(1)
                 # action = self.actor.get_action(observation)
 
                 next_observation, reward, dones, info = self.env.step(action)
                 # print(f"random action: {action}")
-                print(f"next_obs: {next_observation}")
-                print(f"reward: {reward:.2f}")
-                print()
+                # print(f"next_obs: {next_observation}")
+                # print(f"reward: {reward:.2f}")
+                # print()
                 # print(f"dones: {dones}")
                 # print(f"info: {info}")
                 # print()
-                if self.env.step_count % 300 == 0:
+                if self.env.step_count % 100 == 0:
                     print("======EPISODE END====== ")
                     break
 
@@ -266,11 +266,11 @@ class DDPG:
         return episode_reward_lst, episode_reward_avg
 
 def main():
-    env = gym.make("Pendulum-v1")
-    test_env = gym.make("Pendulum-v1")
+    # env = gym.make("Pendulum-v1")
+    # test_env = gym.make("Pendulum-v1")
     card = HIL("qube_servo3_usb", "0")
-    env = QuanserEnv(env, card)
-    test_env = QuanserEnv(test_env, card)
+    env = QuanserEnv(card)
+    test_env = QuanserEnv(card)
 
     config = {
         "env_name": "Pendulum-v1",                          # 환경의 이름
