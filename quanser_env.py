@@ -60,11 +60,35 @@ class QuanserEnv(gym.Env):
 
         self.step_time = time.time()
 
+        low_obs = np.array([
+            -2.5,       # motor_angle(radian)
+            -math.pi,   # pendulum_angle(radian)
+            -np.inf,    # motor_ang_vel(radian/sec)
+            -np.inf,    # pendulum_ang_vel(radian/sec)
+            -2.5        # last_action(radian)
+        ], dtype=np.float32)
+
+        high_obs = np.array([
+             2.5,
+             math.pi,
+             np.inf,
+             np.inf,
+             2.5
+        ], dtype=np.float32)
+
+        self.observation_space = gym.spaces.Box(low=low_obs,
+                                                high=high_obs,
+                                                dtype=np.float32)
+
+        self.action_space = gym.spaces.Box(low=np.array([-2.5], dtype=np.float32),
+                                           high=np.array([ 2.5], dtype=np.float32),
+                                           dtype=np.float32)
+
     def observation_space(self):
-        pass
+        return self.observation_space
 
     def action_space(self):
-        pass
+        return self.action_space
 
     def _get_motor_angle(self):
         enc_val = array('l', [0])
