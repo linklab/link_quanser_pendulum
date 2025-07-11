@@ -46,28 +46,31 @@ class DDPG:
         self.steps_between_train = config["steps_between_train"]
         self.soft_update_tau = config["soft_update_tau"]
         self.replay_buffer_size = config["replay_buffer_size"]
-        """
-        self.actor = Actor(n_features=2, n_actions=1)  # n_features: (motor_angle, pendulum_angle), shape: (2,)
-        self.target_actor = Actor(n_features=2, n_actions=1)
+
+        self.actor = Actor(n_features=5, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (5,)
+        self.target_actor = Actor(n_features=5, n_actions=1)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
 
-        self.q_critic = QCritic(n_features=2, n_actions=1)
-        self.target_q_critic = QCritic(n_features=2, n_actions=1)
+        self.q_critic = QCritic(n_features=5, n_actions=1)
+        self.target_q_critic = QCritic(n_features=5, n_actions=1)
         self.target_q_critic.load_state_dict(self.q_critic.state_dict())
         self.q_critic_optimizer = optim.Adam(self.q_critic.parameters(), lr=self.learning_rate)
 
         self.replay_buffer = ReplayBuffer(capacity=self.replay_buffer_size)
-        """
+
         self.time_steps = 0
         self.training_time_steps = 0
+
+        self.best_count = 0 # 설정한 목표에 도달한 횟수
+        self.best_saved = False
 
         self.total_train_start_time = None
 
     def train_loop(self) -> None:
         self.total_train_start_time = time.time()
 
-        validation_episode_reward_avg = -1500
+        # validation_episode_reward_avg = -1500
         policy_loss = critic_loss = mu_v = 0.0
 
         is_terminated = False
@@ -76,8 +79,8 @@ class DDPG:
             episode_reward = 0
 
             self.env.reset()
-            # observation = self.env.get_init_observations()
-
+            observation = self.env.get_init_observations()
+            print("init_obs: ", observation)
             done = False
 
             print("======EPISODE START====== ")
@@ -85,83 +88,89 @@ class DDPG:
                 self.time_steps += 1
                 # batch_size = 32
                 # action = torch.empty(batch_size).uniform_(-1.0, 1.0) # batch random
-                action = torch.empty(1).uniform_(-1.0, 1.0)
+                # action = torch.empty(1).uniform_(-1.0, 1.0)
                 # action = torch.zeros(1)
-                # action = self.actor.get_action(observation)
+                action = self.actor.get_action(observation)
 
-                next_observation, reward, dones, info = self.env.step(action)
-                print(f"random action: {action}")
-                print(f"next_obs: {next_observation}")
+                next_observation, reward, terminated, truncated, _ = self.env.step(action)
+                # print(f"random action: {action}")
+                # print("===================================================================")
+                # print(f"next_obs: {next_observation}")
                 # print(f"reward: {reward:.2f}")
-                # print()
-                # print(f"dones: {dones}")
+                # print(f"\nterminated: {terminated}")
+                # print(f"truncated: {truncated}")
                 # print(f"info: {info}")
+                # print("===================================================================")
                 # print()
-                if self.env.step_count % 200 == 0:
-                    print("======EPISODE END====== ")
-                    break
+                # if self.env.step_count % 2000 == 0:
+                #     print("======EPISODE END====== ")
+                #     break
 
-                # episode_reward += reward
+                episode_reward += reward
 
-                # transition = Transition(observation, action, next_observation, reward, dones)
+                transition = Transition(observation, action, next_observation, reward, terminated)
 
-                # self.replay_buffer.append(transition)
+                self.replay_buffer.append(transition)
 
-                # observation = next_observation
-                # done = dones
+                observation = next_observation
+                done = terminated or truncated
 
-                # if self.time_steps % self.steps_between_train == 0 and self.time_steps > self.batch_size:
-                #     policy_loss, critic_loss, mu_v = self.train()
+                if self.time_steps % self.steps_between_train == 0 and self.time_steps > self.batch_size:
+                    policy_loss, critic_loss, mu_v = self.train()
 
-            #     if self.time_steps % self.validation_time_steps_interval == 0:
-            #         validation_episode_reward_lst, validation_episode_reward_avg = self.validate()
+                # if self.time_steps % self.validation_time_steps_interval == 0:
+                #     validation_episode_reward_lst, validation_episode_reward_avg = self.validate()
 
-            #         if validation_episode_reward_avg > self.episode_reward_avg_solved:
-            #             print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
-            #             self.model_save(validation_episode_reward_avg)
-            #             is_terminated = True
+                if episode_reward > self.episode_reward_avg_solved:
+                    self.best_count += 1
+                    if self.best_count >= 10: # 10번 설정한 목표에 도달하면 학습 종료
+                        print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
+                        self.model_save(episode_reward)
+                        is_terminated = True
 
-            # if n_episode % self.print_episode_interval == 0:
-            #     print(
-            #         "[Episode {:3,}, Time Steps {:6,}]".format(n_episode, self.time_steps),
-            #         "Episode Reward: {:>9.3f},".format(episode_reward),
-            #         "Policy Loss: {:>7.3f},".format(policy_loss),
-            #         "Critic Loss: {:>7.3f},".format(critic_loss),
-            #         "Training Steps: {:5,}, ".format(self.training_time_steps),
-            #     )
+            print("======EPISODE END====== ")
+
+            if n_episode % self.print_episode_interval == 0:
+                print("####################################################################################")
+                print(
+                    "[Episode {:3,}, Time Steps {:6,}]".format(n_episode, self.time_steps),
+                    "Episode Reward: {:>9.3f},".format(episode_reward),
+                    "Policy Loss: {:>7.3f},".format(policy_loss),
+                    "Critic Loss: {:>7.3f},".format(critic_loss),
+                    "Training Steps: {:5,}, ".format(self.training_time_steps),
+                )
+                print("####################################################################################")
 
             # if self.use_wandb and n_episode > self.validation_time_steps_interval:
-            #     self.log_wandb(
-            #         validation_episode_reward_avg,
-            #         episode_reward,
-            #         policy_loss,
-            #         critic_loss,
-            #         mu_v,
-            #         n_episode,
-            #     )
+            if self.use_wandb:
+                self.log_wandb(
+                    episode_reward,
+                    policy_loss,
+                    critic_loss,
+                    mu_v,
+                    n_episode,
+                )
 
-            # if is_terminated:
-            #     if self.wandb:
-            #         for _ in range(5):
-            #             self.log_wandb(
-            #                 validation_episode_reward_avg,
-            #                 episode_reward,
-            #                 policy_loss,
-            #                 critic_loss,
-            #                 mu_v,
-            #                 n_episode,
-            #             )
-            #     break
+            if is_terminated:
+                if self.wandb:
+                    for _ in range(5):
+                        self.log_wandb(
+                            episode_reward,
+                            policy_loss,
+                            critic_loss,
+                            mu_v,
+                            n_episode,
+                        )
+                break
 
-        # total_training_time = time.time() - self.total_train_start_time
-        # total_training_time = time.strftime("%H:%M:%S", time.gmtime(total_training_time))
-        # print("Total Training End : {}".format(total_training_time))
+        total_training_time = time.time() - self.total_train_start_time
+        total_training_time = time.strftime("%H:%M:%S", time.gmtime(total_training_time))
+        print("Total Training End : {}".format(total_training_time))
         if self.use_wandb:
             self.wandb.finish()
 
     def log_wandb(
         self,
-        validation_episode_reward_avg: float,
         episode_reward: float,
         policy_loss: float,
         critic_loss: float,
@@ -170,9 +179,6 @@ class DDPG:
     ) -> None:
         self.wandb.log(
             {
-                "[VALIDATION] Mean Episode Reward ({0} Episodes)".format(
-                    self.validation_num_episodes
-                ): validation_episode_reward_avg,
                 "[TRAIN] Episode Reward": episode_reward,
                 "[TRAIN] Policy Loss": policy_loss,
                 "[TRAIN] Critic Loss": critic_loss,
@@ -234,18 +240,19 @@ class DDPG:
 
     def validate(self) -> tuple[np.ndarray, float]:
         episode_reward_lst = np.zeros(shape=(self.validation_num_episodes,), dtype=float)
-
+        print("=============VALIDATION===============")
         for i in range(self.validation_num_episodes):
             episode_reward = 0
 
-            observation, _ = self.test_env.reset()
+            self.test_env.reset()
+            observation = self.test_env.get_init_observations()
 
             done = False
 
             while not done:
                 action = self.actor.get_action(observation, exploration=False)
 
-                next_observation, reward, terminated, truncated, _ = self.test_env.step(action * 2)
+                next_observation, reward, terminated, truncated, _ = self.test_env.step(action)
 
                 episode_reward += reward
                 observation = next_observation
@@ -273,7 +280,7 @@ def main():
     test_env = QuanserEnv(card)
 
     config = {
-        "env_name": "Pendulum-v1",                          # 환경의 이름
+        "env_name": "quanser",                              # 환경의 이름
         "max_num_episodes": 200_000,                        # 훈련을 위한 최대 에피소드 횟수
         "batch_size": 256,                                  # 훈련시 배치에서 한번에 가져오는 랜덤 배치 사이즈
         "steps_between_train": 32,                          # 훈련 사이의 환경 스텝 수
@@ -281,13 +288,14 @@ def main():
         "learning_rate": 0.0003,                            # 학습율
         "gamma": 0.99,                                      # 감가율
         "soft_update_tau": 0.995,                           # DDPG Soft Update Tau
-        "print_episode_interval": 20,                       # Episode 통계 출력에 관한 에피소드 간격
+        "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
         "validation_time_steps_interval": 1_000,            # 검증 사이 마다 각 훈련 episode 간격
         "validation_num_episodes": 3,                       # 검증에 수행하는 에피소드 횟수
-        "episode_reward_avg_solved": -150,                  # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "episode_reward_avg_solved": -0.001,                # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
     }
-
-    use_wandb = False
+    # print(env.observation_space)
+    # print(env.action_space)
+    use_wandb = True
     ddpg = DDPG(env=env, test_env=test_env, config=config, use_wandb=use_wandb)
     ddpg.train_loop()
 

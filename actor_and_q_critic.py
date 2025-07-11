@@ -16,7 +16,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Actor(nn.Module):
-    def __init__(self, n_features: int = 2, n_actions: int = 1):
+    def __init__(self, n_features: int = 5, n_actions: int = 1):
         super().__init__()
         self.n_actions = n_actions
         self.fc1 = nn.Linear(n_features, 128)
@@ -53,7 +53,7 @@ class QCritic(nn.Module):
     update. This a Neural Net with 1 hidden layer
     """
 
-    def __init__(self, n_features: int = 2, n_actions: int = 1):
+    def __init__(self, n_features: int = 5, n_actions: int = 1):
         super().__init__()
         self.fc1 = nn.Linear(n_features, 128)
         self.fc2 = nn.Linear(128 + n_actions, 128)
@@ -99,7 +99,7 @@ class ReplayBuffer:
         # Convert to ndarray for speed up cuda
         observations = np.array(observations)
         next_observations = np.array(next_observations)
-        # observations.shape, next_observations.shape: (32, 4), (32, 4)
+        # observations.shape, next_observations.shape: (32, 5), (32, 5)
 
         actions = np.array(actions)
         actions = np.expand_dims(actions, axis=-1) if actions.ndim == 1 else actions

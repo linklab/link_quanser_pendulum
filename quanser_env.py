@@ -33,7 +33,7 @@ class QuanserEnv(gym.Env):
         self.led_channels = np.array([11000, 11001, 11002], dtype=np.uint32)
 
         # control params
-        self.Ts = 0.02            # control timestep [s]
+        self.Ts = 0.01            # control timestep [s]
         self.max_steps = 1000    # after 1000 steps, truncate
         self.step_count = 0
 
@@ -58,7 +58,7 @@ class QuanserEnv(gym.Env):
         zero_ct = array('l', [0])
         self.card.set_encoder_counts(self.pend_enc_ch, len(self.pend_enc_ch), zero_ct)
 
-        self.step_time = time.time()
+        self.step_time = time.time() # control timestep(self.Ts) + overhead time = 0.014~0.016
 
         low_obs = np.array([
             -2.5,       # motor_angle(radian)
@@ -127,7 +127,8 @@ class QuanserEnv(gym.Env):
         motor_angle_vel = self._get_motor_velocity(motor_angle)
         pendulum_angle_vel = self._get_pendulum_velocity(pendulum_angle)
         last_action = self.last_action
-        return motor_angle, pendulum_angle, motor_angle_vel, pendulum_angle_vel, last_action # (rad, rad, rad/s, rad/s, rad)
+        observation_t = torch.tensor([motor_angle, pendulum_angle, motor_angle_vel, pendulum_angle_vel, last_action], dtype=torch.float32)
+        return observation_t
 
     def reset(self):
         self.step_count = 0
@@ -136,7 +137,7 @@ class QuanserEnv(gym.Env):
         self.last_action = 0.0
 
         try:
-            print("\n======RESET======")
+            print("\n======RESET START======")
             # # Reset LED blue
             # blue_led_values = np.array([0.0, 0.0, 1.0], dtype=np.float64)
             # self.card.write_other(self.led_channels, len(self.led_channels), blue_led_values)
@@ -174,8 +175,8 @@ class QuanserEnv(gym.Env):
                 duty = max(min(duty, 0.3), -0.3)  # PWM 제한 [-0.1, +0.1]
 
                 # 현재 모터 각도, 현재 모터 각속도, 현재 duty 값 출력
-                if i % 5 == 0:
-                    print(f"error = {math.degrees(error):+.2f} deg, omega = {omega:.1f} rad/s, duty = {duty:+.3f}")
+                # if i % 5 == 0:
+                    # print(f"error = {math.degrees(error):+.2f} deg, omega = {omega:.1f} rad/s, duty = {duty:+.3f}")
                 self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
                 time.sleep(self.Ts)
             print(f"Reset time: {time.time() - start:.2f} sec")
@@ -184,9 +185,9 @@ class QuanserEnv(gym.Env):
         finally:
             # 모터 정지 및 앰프 OFF
             self.card.write_pwm(array('I', [0]), 1, array('d', [0.0]))
-            # reset 제대로 못하면?
+            print("\n======RESET END======")
 
-    def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, float, bool, bool, dict]:
         # print("step_time: ", time.time() - self.step_time)
         self.step_time = time.time()
         self.step_count += 1
@@ -230,8 +231,8 @@ class QuanserEnv(gym.Env):
         theta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
 
         # reward: -(theta^2 + 0.1 * gamma^2)
-        reward_val = -(theta ** 2 + 0.1 * (gamma ** 2))
-        reward = torch.tensor(reward_val, dtype=torch.float32)
+        reward = -(theta ** 2 + 0.1 * (gamma ** 2))
+        # reward = torch.tensor(reward_val, dtype=torch.float32)
 
         # # Success LED Green
         # if reward.item() > -0.01:
@@ -243,10 +244,13 @@ class QuanserEnv(gym.Env):
 
         # truncation: max steps reached
         truncated = self.step_count >= self.max_steps
+        # if self.step_count % 100 == 0:
+        #     print("motor_angle: ", math.degrees(motor_angle))
+        #     print("step_count: ", self.step_count)
 
         # done flag
-        dones = torch.tensor(terminated or truncated, dtype=torch.long)
+        # dones = torch.tensor(terminated or truncated, dtype=torch.long)
         info = {}
 
 
-        return next_obs, reward, dones, info
+        return next_obs, reward, terminated, truncated, info
