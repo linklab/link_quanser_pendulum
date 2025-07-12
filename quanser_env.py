@@ -38,12 +38,15 @@ class QuanserEnv(gym.Env):
         self.step_count = 0
 
         # for PID control
-        self.Kp = 0.09
+        self.Kp = 0.05
         self.Kd = 0.005
 
         # for estimate angular velocity
         self.prev_motor_angle = None
         self.prev_pend_angle = None
+
+        # for action delta
+        self.delta_max = 0.1 # radian
 
         # for last action observation
         self.last_action = 0.0 # radian
@@ -58,6 +61,9 @@ class QuanserEnv(gym.Env):
         zero_ct = array('l', [0])
         self.card.set_encoder_counts(self.pend_enc_ch, len(self.pend_enc_ch), zero_ct)
 
+        # for pos_err reward
+        self.motor_deadzone = 0.02 # radian, 1.1도 이내로 모터 각도 유지
+
         self.step_time = time.time() # control timestep(self.Ts) + overhead time = 0.014~0.016
 
         low_obs = np.array([
@@ -65,7 +71,7 @@ class QuanserEnv(gym.Env):
             -math.pi,   # pendulum_angle(radian)
             -np.inf,    # motor_ang_vel(radian/sec)
             -np.inf,    # pendulum_ang_vel(radian/sec)
-            -2.5        # last_action(radian)
+            -1.0        # last_action(radian)
         ], dtype=np.float32)
 
         high_obs = np.array([
@@ -73,15 +79,15 @@ class QuanserEnv(gym.Env):
              math.pi,
              np.inf,
              np.inf,
-             2.5
+             1.0
         ], dtype=np.float32)
 
         self.observation_space = gym.spaces.Box(low=low_obs,
                                                 high=high_obs,
                                                 dtype=np.float32)
 
-        self.action_space = gym.spaces.Box(low=np.array([-2.5], dtype=np.float32),
-                                           high=np.array([ 2.5], dtype=np.float32),
+        self.action_space = gym.spaces.Box(low=np.array([-1.0], dtype=np.float32),
+                                           high=np.array([1.0], dtype=np.float32),
                                            dtype=np.float32)
 
     def observation_space(self):
@@ -198,17 +204,20 @@ class QuanserEnv(gym.Env):
         # interpret action as target motor angle [rad]
 
         # =========================ACT=========================
-        target_angle = float(actions.item())
+        a = float(actions.item())
+        delta = np.clip(a, -1.0, 1.0) * self.delta_max
 
-        self.last_action = target_angle
+        self.last_action = a
 
         # read current motor angle
         current_angle = self._get_motor_angle()
         # estimate angular velocity
         omega = self._get_motor_velocity(current=current_angle)
 
+        target_angle = current_angle + delta
+
         # PD position control to compute PWM duty
-        error = target_angle - current_angle
+        error = target_angle - current_angle # delta angle
         duty = self.Kp * error - self.Kd * omega
         duty = max(min(duty, 0.1), -0.1)
         self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
@@ -229,9 +238,14 @@ class QuanserEnv(gym.Env):
 
         raw_diff = pend_angle - math.pi
         theta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
+        pos_error = 0.0
 
-        # reward: -(theta^2 + 0.1 * gamma^2)
-        reward = -(theta ** 2 + 0.1 * (gamma ** 2))
+        if abs(pos_error) < self.motor_deadzone:
+            pos_error = 0.0
+        else:
+            pos_error = motor_angle
+        # reward: -(theta^2 + 0.1 * gamma^2 + 0.01 * pos_error^2)
+        reward = -(theta ** 2 + 0.1 * (gamma ** 2) + 0.01 * (pos_error ** 2))
         # reward = torch.tensor(reward_val, dtype=torch.float32)
 
         # # Success LED Green
