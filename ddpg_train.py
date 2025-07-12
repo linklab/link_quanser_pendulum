@@ -93,19 +93,19 @@ class DDPG:
                 action = self.actor.get_action(observation)
 
                 next_observation, reward, terminated, truncated, _ = self.env.step(action)
-                # print(f"random action: {action}")
-                # print("===================================================================")
-                # print(f"next_obs: {next_observation}")
-                # print(f"reward: {reward:.2f}")
-                # print(f"\nterminated: {terminated}")
-                # print(f"truncated: {truncated}")
-                # print(f"info: {info}")
-                # print("===================================================================")
-                # print()
-                # if self.env.step_count % 2000 == 0:
+                # if self.time_steps % 10 == 0:
+                    # print(f"random action: {action}")
+                    # print("===================================================================")
+                    # print(f"next_obs: {next_observation}")
+                    # print(f"reward: {reward:.2f}")
+                    # print(f"\nterminated: {terminated}")
+                    # print(f"truncated: {truncated}")
+                    # print(f"info: {info}")
+                    # print("===================================================================")
+                    # print()
+                # if self.env.step_count % 200 == 0:
                 #     print("======EPISODE END====== ")
                 #     break
-
                 episode_reward += reward
 
                 transition = Transition(observation, action, next_observation, reward, terminated)
@@ -295,7 +295,7 @@ def main():
     }
     # print(env.observation_space)
     # print(env.action_space)
-    use_wandb = True
+    use_wandb = False
     ddpg = DDPG(env=env, test_env=test_env, config=config, use_wandb=use_wandb)
     ddpg.train_loop()
 
