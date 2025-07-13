@@ -1,4 +1,4 @@
-from quanser.hardware import MAX_STRING_LENGTH
+from quanser.hardware import MAX_STRING_LENGTH, HILError
 from array   import array
 import time
 import math
@@ -14,7 +14,6 @@ class QuanserEnv(gym.Env):
         # self.env = env # unwrapped env는 gymnasium "Pendulum-v1"
         self.card = card
 
-
         # PWM 모드 켜기
         self.card.set_card_specific_options("pwm_en=1", MAX_STRING_LENGTH)        # 필수! :contentReference[oaicite:8]{index=8}
         input_channels = array('I', [1])
@@ -25,9 +24,9 @@ class QuanserEnv(gym.Env):
         self.card.write_digital(array('I',[0]),1,array('I',[1]))
 
         # channels
-        self.pwm_ch = array('I', [0])
-        self.motor_enc_ch = array('I', [0])
-        self.pend_enc_ch = array('I', [1])
+        self.pwm_ch = array('I', [0]) # pwm output channel
+        self.motor_enc_ch = array('I', [0]) # encoder input channel
+        self.pend_enc_ch = array('I', [1]) # encoder input channel
 
         # LED channels
         self.led_channels = np.array([11000, 11001, 11002], dtype=np.uint32)
@@ -38,15 +37,15 @@ class QuanserEnv(gym.Env):
         self.step_count = 0
 
         # for PID control
-        self.Kp = 0.09
-        self.Kd = 0.005
+        self.Kp = 0.1
+        self.Kd = 0.003
 
         # for estimate angular velocity
         self.prev_motor_angle = None
         self.prev_pend_angle = None
 
         # for last action observation
-        self.last_action = 0.0 # radian
+        self.last_action = 0.0 # pwm duty cycle
 
         # get initial motor count
         enc_val = array('l', [0])
@@ -65,7 +64,7 @@ class QuanserEnv(gym.Env):
             -math.pi,   # pendulum_angle(radian)
             -np.inf,    # motor_ang_vel(radian/sec)
             -np.inf,    # pendulum_ang_vel(radian/sec)
-            -2.5        # last_action(radian)
+            -0.1        # last_action(pwm duty cycle)
         ], dtype=np.float32)
 
         high_obs = np.array([
@@ -73,15 +72,15 @@ class QuanserEnv(gym.Env):
              math.pi,
              np.inf,
              np.inf,
-             2.5
+             0.1
         ], dtype=np.float32)
 
         self.observation_space = gym.spaces.Box(low=low_obs,
                                                 high=high_obs,
                                                 dtype=np.float32)
 
-        self.action_space = gym.spaces.Box(low=np.array([-2.5], dtype=np.float32),
-                                           high=np.array([ 2.5], dtype=np.float32),
+        self.action_space = gym.spaces.Box(low=np.array([-0.1], dtype=np.float32),
+                                           high=np.array([0.1], dtype=np.float32),
                                            dtype=np.float32)
 
     def observation_space(self):
@@ -144,7 +143,7 @@ class QuanserEnv(gym.Env):
 
             # ③ PD 제어 파라미터
             duration = 20.0  # 제어 시간 (초) 10초 동안 reset할 시간 주어줌
-            ang_tolerance = 10.0 # (degree) 절댓값 10도 이내로 reset시키면 즉시 reset 종료
+            ang_tolerance = 20.0 # (degree) 절댓값 10도 이내로 reset시키면 즉시 reset 종료
             ang_vel_tolerance = 0.1 # (rad/s) 각속도 0.1 이내로 reset시키면 즉시 reset 종료
             steps = int(duration / self.Ts)
 
@@ -198,6 +197,7 @@ class QuanserEnv(gym.Env):
         # interpret action as target motor angle [rad]
 
         # =========================ACT=========================
+        """
         target_angle = float(actions.item())
 
         self.last_action = target_angle
@@ -212,45 +212,54 @@ class QuanserEnv(gym.Env):
         duty = self.Kp * error - self.Kd * omega
         duty = max(min(duty, 0.1), -0.1)
         self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
+        """
+        try:
+            pwm = float(actions.item()) * 0.1
+            pwm_buf = array('d', [pwm])
+            self.card.write_pwm(self.pwm_ch, 1, pwm_buf)
+
+            # wait for control period
+            time.sleep(self.Ts)
+            # ==================================================
+
+            # read observations from hardware
+            motor_angle = self._get_motor_angle()
+            pend_angle = self._get_pendulum_angle()
+            next_omega = self._get_motor_velocity(current=motor_angle)
+            gamma = self._get_pendulum_velocity(current=pend_angle)
+            next_obs = torch.tensor([motor_angle, pend_angle, next_omega, gamma, self.last_action], dtype=torch.float32)
+
+            # estimate pendulum angular velocity
+
+            raw_diff = pend_angle - math.pi
+            theta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
+
+            # reward: -(theta^2 + 0.1 * gamma^2 + 0.001 * pwm_duty^2)
+            reward = -(theta ** 2 + 0.1 * (gamma ** 2) + 0.001 * (pwm ** 2))
+            # reward = torch.tensor(reward_val, dtype=torch.float32)
+
+            # # Success LED Green
+            # if reward.item() > -0.01:
+            #     green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            #     self.card.write_other(self.led_channels, len(self.led_channels), green_led_values)
+
+            # termination: motor angle exceeds ±130°
+            terminated = abs(math.degrees(motor_angle)) > 130.0
+
+            # truncation: max steps reached
+            truncated = self.step_count >= self.max_steps
+            # if self.step_count % 100 == 0:
+            #     print("motor_angle: ", math.degrees(motor_angle))
+            #     print("step_count: ", self.step_count)
+
+            # done flag
+            # dones = torch.tensor(terminated or truncated, dtype=torch.long)
+            info = {}
 
 
-        # wait for control period
-        time.sleep(self.Ts)
-        # ==================================================
-
-        # read observations from hardware
-        motor_angle = self._get_motor_angle()
-        pend_angle = self._get_pendulum_angle()
-        next_omega = self._get_motor_velocity(current=motor_angle)
-        gamma = self._get_pendulum_velocity(current=pend_angle)
-        next_obs = torch.tensor([motor_angle, pend_angle, next_omega, gamma, self.last_action], dtype=torch.float32)
-
-        # estimate pendulum angular velocity
-
-        raw_diff = pend_angle - math.pi
-        theta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
-
-        # reward: -(theta^2 + 0.1 * gamma^2)
-        reward = -(theta ** 2 + 0.1 * (gamma ** 2))
-        # reward = torch.tensor(reward_val, dtype=torch.float32)
-
-        # # Success LED Green
-        # if reward.item() > -0.01:
-        #     green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        #     self.card.write_other(self.led_channels, len(self.led_channels), green_led_values)
-
-        # termination: motor angle exceeds ±130°
-        terminated = abs(math.degrees(motor_angle)) > 130.0
-
-        # truncation: max steps reached
-        truncated = self.step_count >= self.max_steps
-        # if self.step_count % 100 == 0:
-        #     print("motor_angle: ", math.degrees(motor_angle))
-        #     print("step_count: ", self.step_count)
-
-        # done flag
-        # dones = torch.tensor(terminated or truncated, dtype=torch.long)
-        info = {}
-
-
-        return next_obs, reward, terminated, truncated, info
+            return next_obs, reward, terminated, truncated, info
+        except HILError as e:
+            print(e.error_code)
+            print(e.get_error_message())
+        finally:
+            pass

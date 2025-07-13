@@ -121,12 +121,13 @@ class DDPG:
                 # if self.time_steps % self.validation_time_steps_interval == 0:
                 #     validation_episode_reward_lst, validation_episode_reward_avg = self.validate()
 
-                if episode_reward > self.episode_reward_avg_solved:
+                if not self.best_saved and episode_reward > self.episode_reward_avg_solved:
                     self.best_count += 1
                     if self.best_count >= 10: # 10번 설정한 목표에 도달하면 학습 종료
                         print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
                         self.model_save(episode_reward)
                         is_terminated = True
+                        self.best_saved = True
 
             print("======EPISODE END====== ")
 
@@ -293,9 +294,9 @@ def main():
         "validation_num_episodes": 3,                       # 검증에 수행하는 에피소드 횟수
         "episode_reward_avg_solved": -0.001,                # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
     }
-    # print(env.observation_space)
-    # print(env.action_space)
-    use_wandb = False
+    print(env.observation_space)
+    print(env.action_space)
+    use_wandb = True
     ddpg = DDPG(env=env, test_env=test_env, config=config, use_wandb=use_wandb)
     ddpg.train_loop()
 
