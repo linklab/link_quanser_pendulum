@@ -284,7 +284,7 @@ def main():
         "env_name": "quanser",                              # 환경의 이름
         "max_num_episodes": 200_000,                        # 훈련을 위한 최대 에피소드 횟수
         "batch_size": 256,                                  # 훈련시 배치에서 한번에 가져오는 랜덤 배치 사이즈
-        "steps_between_train": 32,                          # 훈련 사이의 환경 스텝 수
+        "steps_between_train": 2,                          # 훈련 사이의 환경 스텝 수
         "replay_buffer_size": 1_000_000,                    # 리플레이 버퍼 사이즈
         "learning_rate": 0.0003,                            # 학습율
         "gamma": 0.99,                                      # 감가율

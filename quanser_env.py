@@ -64,7 +64,7 @@ class QuanserEnv(gym.Env):
             -math.pi,   # pendulum_angle(radian)
             -np.inf,    # motor_ang_vel(radian/sec)
             -np.inf,    # pendulum_ang_vel(radian/sec)
-            -0.1        # last_action(pwm duty cycle)
+            -1.0        # last_action(pwm duty cycle)
         ], dtype=np.float32)
 
         high_obs = np.array([
@@ -72,15 +72,15 @@ class QuanserEnv(gym.Env):
              math.pi,
              np.inf,
              np.inf,
-             0.1
+             1.0
         ], dtype=np.float32)
 
         self.observation_space = gym.spaces.Box(low=low_obs,
                                                 high=high_obs,
                                                 dtype=np.float32)
 
-        self.action_space = gym.spaces.Box(low=np.array([-0.1], dtype=np.float32),
-                                           high=np.array([0.1], dtype=np.float32),
+        self.action_space = gym.spaces.Box(low=np.array([-1.0], dtype=np.float32),
+                                           high=np.array([1.0], dtype=np.float32),
                                            dtype=np.float32)
 
     def observation_space(self):
@@ -166,7 +166,9 @@ class QuanserEnv(gym.Env):
 
                 # 허용 오차 이내로 reset시키면 즉시 reset 종료
                 if abs(math.degrees(error)) < ang_tolerance and abs(omega) < ang_vel_tolerance:
-                    print("======RESET COMPLETE======")
+                    print("init count: ", self.init_count)
+                    print("current count: ", enc_val[0])
+                    print(f"======RESET COMPLETE(error: {math.degrees(error)})======")
                     break
 
                 # PD 제어
@@ -245,6 +247,8 @@ class QuanserEnv(gym.Env):
 
             # termination: motor angle exceeds ±130°
             terminated = abs(math.degrees(motor_angle)) > 130.0
+            if terminated:
+                print("\nTERMINATED!! motor_angle: ", abs(math.degrees(motor_angle)))
 
             # truncation: max steps reached
             truncated = self.step_count >= self.max_steps

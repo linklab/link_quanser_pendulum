@@ -36,13 +36,11 @@ class Actor(nn.Module):
     def get_action(self, x: torch.Tensor, exploration: bool = True) -> np.ndarray:
         mu_v = self.forward(x)
 
-        action = mu_v.detach().numpy()
-
         if exploration:
-            noises = np.random.normal(size=self.n_actions, loc=0, scale=1.0)
-            action = action + noises
+            noise = torch.normal(mean=torch.zeros_like(mu_v), std=0.1)
+            mu_v += noise
 
-        action = np.clip(action, a_min=-1., a_max=1.)
+        action = torch.clip(mu_v, min=-1.0, max=1.0)
 
         return action
 
@@ -100,7 +98,8 @@ class ReplayBuffer:
         observations = np.array(observations)
         next_observations = np.array(next_observations)
         # observations.shape, next_observations.shape: (32, 5), (32, 5)
-
+        actions = torch.tensor(actions)
+        actions = actions.detach().numpy()
         actions = np.array(actions)
         actions = np.expand_dims(actions, axis=-1) if actions.ndim == 1 else actions
         rewards = np.array(rewards)
