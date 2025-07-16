@@ -66,6 +66,7 @@ class DDPG:
         self.best_saved = False
 
         self.total_train_start_time = None
+        self.train_start_time = None
 
     def train_loop(self) -> None:
         self.total_train_start_time = time.time()
@@ -85,6 +86,7 @@ class DDPG:
 
             print("======EPISODE START====== ")
             while not done:
+                self.train_start_time = time.time()
                 self.time_steps += 1
                 # batch_size = 32
                 # action = torch.empty(batch_size).uniform_(-1.0, 1.0) # batch random
@@ -114,6 +116,8 @@ class DDPG:
 
                 observation = next_observation
                 done = terminated or truncated
+                # if self.env.step_count % 200 == 0:
+                #     done = True
 
                 if self.time_steps % self.steps_between_train == 0 and self.time_steps > self.batch_size:
                     policy_loss, critic_loss, mu_v = self.train()
@@ -134,11 +138,12 @@ class DDPG:
             if n_episode % self.print_episode_interval == 0:
                 print("####################################################################################")
                 print(
-                    "[Episode {:3,}, Time Steps {:6,}]".format(n_episode, self.time_steps),
-                    "Episode Reward: {:>9.3f},".format(episode_reward),
-                    "Policy Loss: {:>7.3f},".format(policy_loss),
-                    "Critic Loss: {:>7.3f},".format(critic_loss),
-                    "Training Steps: {:5,}, ".format(self.training_time_steps),
+                    "\n[Episode {:3,}, Time Steps {:6,}]".format(n_episode, self.time_steps),
+                    "\nEpisode Reward: {:>9.3f},".format(episode_reward),
+                    "\nPolicy Loss: {:>7.3f},".format(policy_loss),
+                    "\nCritic Loss: {:>7.3f},".format(critic_loss),
+                    "\nTraining Steps: {:5,}, ".format(self.training_time_steps),
+                    "\nTraining Time: {}, \n".format(time.strftime("%H:%M:%S", time.gmtime(time.time() - self.train_start_time))),
                 )
                 print("####################################################################################")
 
@@ -292,11 +297,11 @@ def main():
         "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
         "validation_time_steps_interval": 1_000,            # 검증 사이 마다 각 훈련 episode 간격
         "validation_num_episodes": 3,                       # 검증에 수행하는 에피소드 횟수
-        "episode_reward_avg_solved": -0.001,                # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "episode_reward_avg_solved": 3000.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
     }
     print(env.observation_space)
     print(env.action_space)
-    use_wandb = True
+    use_wandb = False
     ddpg = DDPG(env=env, test_env=test_env, config=config, use_wandb=use_wandb)
     ddpg.train_loop()
 

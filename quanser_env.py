@@ -34,11 +34,15 @@ class QuanserEnv(gym.Env):
         # control params
         self.Ts = 0.01            # control timestep [s]
         self.max_steps = 1000    # after 1000 steps, truncate
+        self.action_scale = 0.3
+
+        # counter
         self.step_count = 0
+        self.reset_count = 0
 
         # for PID control
-        self.Kp = 0.1
-        self.Kd = 0.003
+        self.Kp = 0.5
+        self.Kd = 0.02
 
         # for estimate angular velocity
         self.prev_motor_angle = None
@@ -64,7 +68,7 @@ class QuanserEnv(gym.Env):
             -math.pi,   # pendulum_angle(radian)
             -np.inf,    # motor_ang_vel(radian/sec)
             -np.inf,    # pendulum_ang_vel(radian/sec)
-            -0.1        # last_action(pwm duty cycle)
+            -1.0        # last_action(pwm duty cycle)
         ], dtype=np.float32)
 
         high_obs = np.array([
@@ -72,15 +76,15 @@ class QuanserEnv(gym.Env):
              math.pi,
              np.inf,
              np.inf,
-             0.1
+             1.0
         ], dtype=np.float32)
 
         self.observation_space = gym.spaces.Box(low=low_obs,
                                                 high=high_obs,
                                                 dtype=np.float32)
 
-        self.action_space = gym.spaces.Box(low=np.array([-0.1], dtype=np.float32),
-                                           high=np.array([0.1], dtype=np.float32),
+        self.action_space = gym.spaces.Box(low=np.array([-1.0], dtype=np.float32),
+                                           high=np.array([1.0], dtype=np.float32),
                                            dtype=np.float32)
 
     def observation_space(self):
@@ -120,6 +124,35 @@ class QuanserEnv(gym.Env):
         self.prev_pend_angle = current
         return gamma
 
+    def _reset_init_count(self):
+        push_max_count = 0
+        push_min_count = 0
+        push_max_cnt = 0
+        push_min_cnt = 0
+
+        while True:
+            print("!@#!@##!@!@#!@#!@#@!#@#!@#!@#!@#@#@#!")
+            push_max_cnt += 1
+            self.card.write_pwm(self.pwm_ch, 1, array('d', [0.1]))  # max push
+            time.sleep(self.Ts)
+            if push_max_cnt > 1000:
+                enc_val = array('l', [0])
+                self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
+                push_max_count = enc_val[0]
+                break
+
+        while True:
+            push_min_cnt += 1
+            self.card.write_pwm(self.pwm_ch, 1, array('d', [-0.1]))  # min push
+            time.sleep(self.Ts)
+            if push_min_cnt > 1000:
+                enc_val = array('l', [0])
+                self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
+                push_min_count = enc_val[0]
+                break
+
+        self.init_count = int((push_max_count + push_min_count) / 2.0)
+
     def get_init_observations(self):
         motor_angle = self._get_motor_angle()
         pendulum_angle = self._get_pendulum_angle()
@@ -127,10 +160,12 @@ class QuanserEnv(gym.Env):
         pendulum_angle_vel = self._get_pendulum_velocity(pendulum_angle)
         last_action = self.last_action
         observation_t = torch.tensor([motor_angle, pendulum_angle, motor_angle_vel, pendulum_angle_vel, last_action], dtype=torch.float32)
+        print(motor_angle, "!!!!!!!!!!!!!!!!!!!!!!!!")
         return observation_t
 
     def reset(self):
         self.step_count = 0
+        self.reset_count += 1
         self.prev_motor_angle = None
         self.prev_pend_angle = None
         self.last_action = 0.0
@@ -143,8 +178,8 @@ class QuanserEnv(gym.Env):
 
             # ③ PD 제어 파라미터
             duration = 20.0  # 제어 시간 (초) 10초 동안 reset할 시간 주어줌
-            ang_tolerance = 20.0 # (degree) 절댓값 10도 이내로 reset시키면 즉시 reset 종료
-            ang_vel_tolerance = 0.1 # (rad/s) 각속도 0.1 이내로 reset시키면 즉시 reset 종료
+            ang_tolerance = 5.0 # (degree) 절댓값 10도 이내로 reset시키면 즉시 reset 종료
+            ang_vel_tolerance = 0.01 # (rad/s) 각속도 0.1 이내로 reset시키면 즉시 reset 종료
             steps = int(duration / self.Ts)
 
             init_val = array('l', [0])
@@ -152,6 +187,10 @@ class QuanserEnv(gym.Env):
             prev_error = (self.init_count - init_val[0]) * 2 * math.pi / 2048.0
 
             start = time.time()
+            stop_counter = 0
+            if self.reset_count % 1 == 0:
+                self._reset_init_count()
+            self._reset_init_count()
             # ④ 제어 루프
             for i in range(steps):
                 # 현재 각도 읽기
@@ -163,15 +202,20 @@ class QuanserEnv(gym.Env):
                 # 각속도 추정 (Finite difference)
                 omega = (error - prev_error) / self.Ts
                 prev_error = error
-
                 # 허용 오차 이내로 reset시키면 즉시 reset 종료
-                if abs(math.degrees(error)) < ang_tolerance and abs(omega) < ang_vel_tolerance:
-                    print("======RESET COMPLETE======")
+                if abs(math.degrees(error)) < ang_tolerance:
+                    stop_counter += 1
+                    # print(f"end angle: {math.degrees(error)}")
+                else:
+                    stop_counter = 0
+
+                if stop_counter >= 500:
+                    print(f"======RESET COMPLETE======")
                     break
 
                 # PD 제어
                 duty = self.Kp * error + self.Kd * omega  # p_gain * angle + d_gain * angular_vel
-                duty = max(min(duty, 0.3), -0.3)  # PWM 제한 [-0.1, +0.1]
+                # duty = max(min(duty, 0.3), -0.3)  # PWM 제한 [-0.1, +0.1]
 
                 # 현재 모터 각도, 현재 모터 각속도, 현재 duty 값 출력
                 # if i % 5 == 0:
@@ -180,11 +224,11 @@ class QuanserEnv(gym.Env):
                 time.sleep(self.Ts)
             print(f"Reset time: {time.time() - start:.2f} sec")
 
-
         finally:
             # 모터 정지 및 앰프 OFF
             self.card.write_pwm(array('I', [0]), 1, array('d', [0.0]))
             print("\n======RESET END======")
+            print("INIT_COUNT: ", self.init_count)
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, float, bool, bool, dict]:
         # print("step_time: ", time.time() - self.step_time)
@@ -197,24 +241,8 @@ class QuanserEnv(gym.Env):
         # interpret action as target motor angle [rad]
 
         # =========================ACT=========================
-        """
-        target_angle = float(actions.item())
-
-        self.last_action = target_angle
-
-        # read current motor angle
-        current_angle = self._get_motor_angle()
-        # estimate angular velocity
-        omega = self._get_motor_velocity(current=current_angle)
-
-        # PD position control to compute PWM duty
-        error = target_angle - current_angle
-        duty = self.Kp * error - self.Kd * omega
-        duty = max(min(duty, 0.1), -0.1)
-        self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
-        """
         try:
-            pwm = float(actions.item()) * 0.1
+            pwm = float(actions.item()) * self.action_scale
             pwm_buf = array('d', [pwm])
             self.card.write_pwm(self.pwm_ch, 1, pwm_buf)
 
@@ -231,29 +259,25 @@ class QuanserEnv(gym.Env):
 
             # estimate pendulum angular velocity
 
-            raw_diff = pend_angle - math.pi
+            raw_diff = pend_angle
             theta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
 
-            # reward: -(theta^2 + 0.1 * gamma^2 + 0.001 * pwm_duty^2)
-            reward = -(theta ** 2 + 0.1 * (gamma ** 2) + 0.001 * (pwm ** 2))
-            # reward = torch.tensor(reward_val, dtype=torch.float32)
+            reward = abs(theta)
 
+            # reward: -(theta^2 + 0.1 * gamma^2 + 0.001 * pwm_duty^2)
+            # reward = -(theta ** 2 + 0.1 * (gamma ** 2) + 0.001 * (pwm ** 2))
+            # reward = torch.tensor(reward_val, dtype=torch.float32)
             # # Success LED Green
             # if reward.item() > -0.01:
             #     green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
             #     self.card.write_other(self.led_channels, len(self.led_channels), green_led_values)
 
             # termination: motor angle exceeds ±130°
-            terminated = abs(math.degrees(motor_angle)) > 130.0
+            terminated = abs(math.degrees(motor_angle)) > 100.0
 
             # truncation: max steps reached
             truncated = self.step_count >= self.max_steps
-            # if self.step_count % 100 == 0:
-            #     print("motor_angle: ", math.degrees(motor_angle))
-            #     print("step_count: ", self.step_count)
 
-            # done flag
-            # dones = torch.tensor(terminated or truncated, dtype=torch.long)
             info = {}
 
 
