@@ -41,8 +41,8 @@ class QuanserEnv(gym.Env):
         self.reset_count = 0
 
         # for PID control
-        self.Kp = 0.5
-        self.Kd = 0.02
+        self.Kp = 0.8
+        self.Kd = 0.001
 
         # for estimate angular velocity
         self.prev_motor_angle = None
@@ -51,15 +51,12 @@ class QuanserEnv(gym.Env):
         # for last action observation
         self.last_action = 0.0 # pwm duty cycle
 
-        # get initial motor count
-        enc_val = array('l', [0])
-        self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
-        self.init_count = enc_val[0]
-        print(f"SET INIT COUNT: {self.init_count}")
-
         # initialize pendulum degree
         zero_ct = array('l', [0])
         self.card.set_encoder_counts(self.pend_enc_ch, len(self.pend_enc_ch), zero_ct)
+
+        # get initial motor count
+        self._reset_init_count()
 
         self.step_time = time.time() # control timestep(self.Ts) + overhead time = 0.014~0.016
 
@@ -131,9 +128,8 @@ class QuanserEnv(gym.Env):
         push_min_cnt = 0
 
         while True:
-            print("!@#!@##!@!@#!@#!@#@!#@#!@#!@#!@#@#@#!")
             push_max_cnt += 1
-            self.card.write_pwm(self.pwm_ch, 1, array('d', [0.1]))  # max push
+            self.card.write_pwm(self.pwm_ch, 1, array('d', [0.05]))  # max push
             time.sleep(self.Ts)
             if push_max_cnt > 1000:
                 enc_val = array('l', [0])
@@ -143,7 +139,7 @@ class QuanserEnv(gym.Env):
 
         while True:
             push_min_cnt += 1
-            self.card.write_pwm(self.pwm_ch, 1, array('d', [-0.1]))  # min push
+            self.card.write_pwm(self.pwm_ch, 1, array('d', [-0.05]))  # min push
             time.sleep(self.Ts)
             if push_min_cnt > 1000:
                 enc_val = array('l', [0])
@@ -152,6 +148,7 @@ class QuanserEnv(gym.Env):
                 break
 
         self.init_count = int((push_max_count + push_min_count) / 2.0)
+        print("set init count: ", self.init_count)
 
     def get_init_observations(self):
         motor_angle = self._get_motor_angle()
@@ -181,47 +178,61 @@ class QuanserEnv(gym.Env):
             ang_tolerance = 5.0 # (degree) 절댓값 10도 이내로 reset시키면 즉시 reset 종료
             ang_vel_tolerance = 0.01 # (rad/s) 각속도 0.1 이내로 reset시키면 즉시 reset 종료
             steps = int(duration / self.Ts)
+            push_max_cnt = 0
+            while True:
+                push_max_cnt += 1
+                if self.reset_count % 2 == 0:
+                    self.card.write_pwm(self.pwm_ch, 1, array('d', [-0.05]))
+                else:
+                    self.card.write_pwm(self.pwm_ch, 1, array('d', [0.05]))
+                time.sleep(self.Ts)
+                if push_max_cnt > 1000:
+                    zero_ct = array('l', [0])
+                    self.card.set_encoder_counts(self.pend_enc_ch, len(self.pend_enc_ch), zero_ct)
+                    break
 
             init_val = array('l', [0])
             self.card.read_encoder(self.motor_enc_ch, 1, init_val)
-            prev_error = (self.init_count - init_val[0]) * 2 * math.pi / 2048.0
+            first_rad = init_val[0] * 2 * math.pi / 2048.0
 
             start = time.time()
-            stop_counter = 0
-            if self.reset_count % 1 == 0:
+            reset_counter = 0
+            reset_success_num = 0
+
+            if self.reset_count % 100 == 0:
                 self._reset_init_count()
-            self._reset_init_count()
+
             # ④ 제어 루프
-            for i in range(steps):
-                # 현재 각도 읽기
+            while True:
+                reset_counter += 1
+                time.sleep(self.Ts)
                 enc_val = array('l', [0])
                 self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
-                count = self.init_count - enc_val[0]  # target_angle - current_angle
-                error = count * 2 * math.pi / 2048.0
+                init_rad = self.init_count * 2 * math.pi / 2048.0
+                cur_rad = enc_val[0] * 2 * math.pi / 2048.0
+                error_rad = init_rad - cur_rad
 
-                # 각속도 추정 (Finite difference)
-                omega = (error - prev_error) / self.Ts
-                prev_error = error
-                # 허용 오차 이내로 reset시키면 즉시 reset 종료
-                if abs(math.degrees(error)) < ang_tolerance:
-                    stop_counter += 1
-                    # print(f"end angle: {math.degrees(error)}")
+                if abs(error_rad) < 0.1:
+                    reset_success_num += 1
                 else:
-                    stop_counter = 0
+                    reset_success_num = 0
 
-                if stop_counter >= 500:
-                    print(f"======RESET COMPLETE======")
+                if reset_success_num > 100:
                     break
 
+                if reset_counter == 1:
+                    omega = (cur_rad - first_rad) / self.Ts
+                else:
+                    omega = (cur_rad - prev_rad) / self.Ts
+
+                prev_rad = cur_rad
+
                 # PD 제어
-                duty = self.Kp * error + self.Kd * omega  # p_gain * angle + d_gain * angular_vel
-                # duty = max(min(duty, 0.3), -0.3)  # PWM 제한 [-0.1, +0.1]
+                duty = self.Kp * error_rad + self.Kd * omega  # p_gain * angle + d_gain * angular_vel
+                duty = max(min(duty, 0.04), -0.04)
 
                 # 현재 모터 각도, 현재 모터 각속도, 현재 duty 값 출력
-                # if i % 5 == 0:
-                    # print(f"error = {math.degrees(error):+.2f} deg, omega = {omega:.1f} rad/s, duty = {duty:+.3f}")
                 self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
-                time.sleep(self.Ts)
             print(f"Reset time: {time.time() - start:.2f} sec")
 
         finally:
@@ -280,6 +291,9 @@ class QuanserEnv(gym.Env):
 
             info = {}
 
+            if terminated or truncated:
+                self.card.write_pwm(self.pwm_ch, 1, array('d', [0.0]))
+                time.sleep(1)
 
             return next_obs, reward, terminated, truncated, info
         except HILError as e:

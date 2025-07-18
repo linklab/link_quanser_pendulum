@@ -283,7 +283,6 @@ def main():
     # test_env = gym.make("Pendulum-v1")
     card = HIL("qube_servo3_usb", "0")
     env = QuanserEnv(card)
-    test_env = QuanserEnv(card)
 
     config = {
         "env_name": "quanser",                              # 환경의 이름
@@ -301,8 +300,8 @@ def main():
     }
     print(env.observation_space)
     print(env.action_space)
-    use_wandb = False
-    ddpg = DDPG(env=env, test_env=test_env, config=config, use_wandb=use_wandb)
+    use_wandb = True
+    ddpg = DDPG(env=env, test_env=env, config=config, use_wandb=use_wandb)
     ddpg.train_loop()
 
 if __name__ == "__main__":
