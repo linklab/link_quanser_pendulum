@@ -40,9 +40,9 @@ class QuanserEnv(gym.Env):
         self.step_count = 0
         self.reset_count = 0
 
-        # for PID control
+        # for PID control(0.8, 0.001)
         self.Kp = 0.8
-        self.Kd = 0.001
+        self.Kd = 0.02
 
         # for estimate angular velocity
         self.prev_motor_angle = None
@@ -58,7 +58,7 @@ class QuanserEnv(gym.Env):
         # get initial motor count
         self._reset_init_count()
 
-        self.step_time = time.time() # control timestep(self.Ts) + overhead time = 0.014~0.016
+        # self.step_time = time.time() # control timestep(self.Ts) + overhead time = 0.014~0.016
 
         low_obs = np.array([
             -2.5,       # motor_angle(radian)
@@ -92,12 +92,14 @@ class QuanserEnv(gym.Env):
 
     def _get_motor_angle(self):
         enc_val = array('l', [0])
+        self.motor_read0 = time.perf_counter()
         self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
         count = enc_val[0] - self.init_count
         return count * 2 * math.pi / 2048.0 # radian
 
     def _get_pendulum_angle(self):
         enc_val = array('l', [0])
+        self.pendulum_read0 = time.perf_counter()
         self.card.read_encoder(self.pend_enc_ch, 1, enc_val)
         raw_angle = enc_val[0] * 2 * math.pi / 2048.0
         angle = ((raw_angle + math.pi) % (2 * math.pi)) - math.pi
@@ -107,7 +109,8 @@ class QuanserEnv(gym.Env):
         if self.prev_motor_angle is None:
             omega = 0.0
         else:
-            omega = (current - self.prev_motor_angle) / self.Ts
+            angle_interval = time.perf_counter() - self.motor_read0
+            omega = (current - self.prev_motor_angle) / angle_interval
         self.prev_motor_angle = current
         return omega
 
@@ -117,7 +120,8 @@ class QuanserEnv(gym.Env):
         else:
             raw_diff = current - self.prev_pend_angle
             delta = ((raw_diff + math.pi) % (2 * math.pi)) - math.pi
-            gamma = delta / self.Ts
+            angle_interval = time.perf_counter() - self.pendulum_read0
+            gamma = delta / angle_interval
         self.prev_pend_angle = current
         return gamma
 
@@ -129,8 +133,8 @@ class QuanserEnv(gym.Env):
 
         while True:
             push_max_cnt += 1
-            self.card.write_pwm(self.pwm_ch, 1, array('d', [0.05]))  # max push
-            time.sleep(self.Ts)
+            self.card.write_pwm(self.pwm_ch, 1, array('d', [0.08]))  # max push
+            time.sleep(0.01)
             if push_max_cnt > 1000:
                 enc_val = array('l', [0])
                 self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
@@ -139,8 +143,8 @@ class QuanserEnv(gym.Env):
 
         while True:
             push_min_cnt += 1
-            self.card.write_pwm(self.pwm_ch, 1, array('d', [-0.05]))  # min push
-            time.sleep(self.Ts)
+            self.card.write_pwm(self.pwm_ch, 1, array('d', [-0.08]))  # min push
+            time.sleep(0.01)
             if push_min_cnt > 1000:
                 enc_val = array('l', [0])
                 self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
@@ -157,8 +161,16 @@ class QuanserEnv(gym.Env):
         pendulum_angle_vel = self._get_pendulum_velocity(pendulum_angle)
         last_action = self.last_action
         observation_t = torch.tensor([motor_angle, pendulum_angle, motor_angle_vel, pendulum_angle_vel, last_action], dtype=torch.float32)
-        print(motor_angle, "!!!!!!!!!!!!!!!!!!!!!!!!")
         return observation_t
+
+    def noramlize_observation(self, observation):
+        motor_angle_n = observation[0] / 1.8
+        pendulum_angle_n = observation[1] / math.pi
+        motor_angle_vel_n = observation[2] / 10.0
+        pendulum_angle_vel_n = observation[3] / 10.0
+        last_action_n = observation[4] / self.action_scale
+        observation_n = torch.tensor([motor_angle_n, pendulum_angle_n, motor_angle_vel_n, pendulum_angle_vel_n, last_action_n], dtype=torch.float32)
+        return observation_n
 
     def reset(self):
         self.step_count = 0
@@ -173,11 +185,6 @@ class QuanserEnv(gym.Env):
             # blue_led_values = np.array([0.0, 0.0, 1.0], dtype=np.float64)
             # self.card.write_other(self.led_channels, len(self.led_channels), blue_led_values)
 
-            # ③ PD 제어 파라미터
-            duration = 20.0  # 제어 시간 (초) 10초 동안 reset할 시간 주어줌
-            ang_tolerance = 5.0 # (degree) 절댓값 10도 이내로 reset시키면 즉시 reset 종료
-            ang_vel_tolerance = 0.01 # (rad/s) 각속도 0.1 이내로 reset시키면 즉시 reset 종료
-            steps = int(duration / self.Ts)
             push_max_cnt = 0
             while True:
                 push_max_cnt += 1
@@ -185,7 +192,7 @@ class QuanserEnv(gym.Env):
                     self.card.write_pwm(self.pwm_ch, 1, array('d', [-0.05]))
                 else:
                     self.card.write_pwm(self.pwm_ch, 1, array('d', [0.05]))
-                time.sleep(self.Ts)
+                time.sleep(0.01)
                 if push_max_cnt > 1000:
                     zero_ct = array('l', [0])
                     self.card.set_encoder_counts(self.pend_enc_ch, len(self.pend_enc_ch), zero_ct)
@@ -202,12 +209,19 @@ class QuanserEnv(gym.Env):
             if self.reset_count % 100 == 0:
                 self._reset_init_count()
 
+            read_enc_time = 0.0
+            write_pwm_time = 0.0
             # ④ 제어 루프
             while True:
+                c0 = time.perf_counter()
                 reset_counter += 1
-                time.sleep(self.Ts)
+                time.sleep(self.Ts - (write_pwm_time + read_enc_time))
                 enc_val = array('l', [0])
+                motor_read0 = time.perf_counter()
                 self.card.read_encoder(self.motor_enc_ch, 1, enc_val)
+                motor_read1 = time.perf_counter()
+                read_enc_time = motor_read1 - motor_read0
+
                 init_rad = self.init_count * 2 * math.pi / 2048.0
                 cur_rad = enc_val[0] * 2 * math.pi / 2048.0
                 error_rad = init_rad - cur_rad
@@ -220,31 +234,42 @@ class QuanserEnv(gym.Env):
                 if reset_success_num > 100:
                     break
 
+                angle_interval = time.perf_counter() - motor_read0
                 if reset_counter == 1:
                     omega = (cur_rad - first_rad) / self.Ts
                 else:
                     omega = (cur_rad - prev_rad) / self.Ts
-
                 prev_rad = cur_rad
 
                 # PD 제어
-                duty = self.Kp * error_rad + self.Kd * omega  # p_gain * angle + d_gain * angular_vel
+                duty = self.Kp * error_rad - self.Kd * omega  # p_gain * angle + d_gain * angular_vel
                 duty = max(min(duty, 0.04), -0.04)
 
                 # 현재 모터 각도, 현재 모터 각속도, 현재 duty 값 출력
+                pwm_write0 = time.perf_counter()
                 self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
+                pwm_write1 = time.perf_counter()
+                write_pwm_time = pwm_write1 - pwm_write0
+                c1 = time.perf_counter()
+                # print(f"reset_control_time: {(c1 - c0):.4f}")
             print(f"Reset time: {time.time() - start:.2f} sec")
 
         finally:
             # 모터 정지 및 앰프 OFF
             self.card.write_pwm(array('I', [0]), 1, array('d', [0.0]))
             print("\n======RESET END======")
-            print("INIT_COUNT: ", self.init_count)
+            obs = self.get_init_observations()
+            obs = self.noramlize_observation(obs)
+            return obs
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, float, bool, bool, dict]:
+        # while (time.time() - self.step_time) < 0.02:
+        #     time.sleep(0.00001)
+
         # print("step_time: ", time.time() - self.step_time)
-        self.step_time = time.time()
+        # self.step_time = time.time()
         self.step_count += 1
+
 
         # # Step LED Red
         # red_led_values = np.array([1.0, 0.0, 0.0], dtype=np.float64)
@@ -253,21 +278,35 @@ class QuanserEnv(gym.Env):
 
         # =========================ACT=========================
         try:
+            c0 = time.perf_counter()
             pwm = float(actions.item()) * self.action_scale
+            self.last_action = pwm
             pwm_buf = array('d', [pwm])
+            pwm_write0 = time.perf_counter()
             self.card.write_pwm(self.pwm_ch, 1, pwm_buf)
+            pwm_write1 = time.perf_counter()
+            write_pwm_time = pwm_write1 - pwm_write0
 
             # wait for control period
-            time.sleep(self.Ts)
             # ==================================================
 
             # read observations from hardware
+            read_enc0 = time.perf_counter()
             motor_angle = self._get_motor_angle()
             pend_angle = self._get_pendulum_angle()
+            read_enc1 = time.perf_counter()
+            read_enc_time = read_enc1 - read_enc0
+            time.sleep(self.Ts - (write_pwm_time + read_enc_time))
             next_omega = self._get_motor_velocity(current=motor_angle)
             gamma = self._get_pendulum_velocity(current=pend_angle)
             next_obs = torch.tensor([motor_angle, pend_angle, next_omega, gamma, self.last_action], dtype=torch.float32)
+            next_obs = self.noramlize_observation(next_obs)
 
+            # print("\nn_motor_angle: ", next_obs[0].item())
+            # print("n_pendulum_angle: ", next_obs[1].item())
+            # print("n_motor_vel: ", next_obs[2].item())
+            # print("n_pendulum_vel: ", next_obs[3].item())
+            # print("n_last_action: ", next_obs[4].item())
             # estimate pendulum angular velocity
 
             raw_diff = pend_angle
@@ -291,10 +330,11 @@ class QuanserEnv(gym.Env):
 
             info = {}
 
-            if terminated or truncated:
-                self.card.write_pwm(self.pwm_ch, 1, array('d', [0.0]))
-                time.sleep(1)
-
+            c1 = time.perf_counter()
+            # print(f"step_control_time: {(c1 - c0):.4f}")
+            # if terminated or truncated:
+            #     self.card.write_pwm(self.pwm_ch, 1, array('d', [0.0]))
+            #     time.sleep(1)
             return next_obs, reward, terminated, truncated, info
         except HILError as e:
             print(e.error_code)
