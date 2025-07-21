@@ -46,6 +46,9 @@ class DDPG:
         self.steps_between_train = config["steps_between_train"]
         self.soft_update_tau = config["soft_update_tau"]
         self.replay_buffer_size = config["replay_buffer_size"]
+        self.epsilon_start = config["epsilon_start"]
+        self.epsilon_end = config["epsilon_end"]
+        self.epsilon_decay = config["epsilon_decay"]
 
         self.actor = Actor(n_features=5, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (5,)
         self.target_actor = Actor(n_features=5, n_actions=1)
@@ -79,9 +82,7 @@ class DDPG:
         for n_episode in range(1, self.max_num_episodes + 1):
             episode_reward = 0
 
-            self.env.reset()
-            observation = self.env.get_init_observations()
-            print("init_obs: ", observation)
+            observation = self.env.reset()
             done = False
 
             print("======EPISODE START====== ")
@@ -92,7 +93,7 @@ class DDPG:
                 # action = torch.empty(batch_size).uniform_(-1.0, 1.0) # batch random
                 # action = torch.empty(1).uniform_(-1.0, 1.0)
                 # action = torch.zeros(1)
-                action = self.actor.get_action(observation)
+                action = self.actor.get_action_e(self.env, observation, self.time_steps, self.epsilon_start, self.epsilon_end, self.epsilon_decay)
 
                 next_observation, reward, terminated, truncated, _ = self.env.step(action)
                 # if self.time_steps % 10 == 0:
@@ -213,6 +214,7 @@ class DDPG:
 
         # ACTOR UPDATE
         mu_v = self.actor(observations)
+        # with torch.no_grad():
         q_v = self.q_critic(observations, mu_v)
         actor_objective = q_v.mean()
         actor_loss = -1.0 * actor_objective
@@ -250,8 +252,7 @@ class DDPG:
         for i in range(self.validation_num_episodes):
             episode_reward = 0
 
-            self.test_env.reset()
-            observation = self.test_env.get_init_observations()
+            observation = self.test_env.reset()
 
             done = False
 
@@ -297,10 +298,13 @@ def main():
         "validation_time_steps_interval": 1_000,            # 검증 사이 마다 각 훈련 episode 간격
         "validation_num_episodes": 3,                       # 검증에 수행하는 에피소드 횟수
         "episode_reward_avg_solved": 3000.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "epsilon_start": 1.0,
+        "epsilon_end": 0.05,
+        "epsilon_decay": 1000000,
     }
     print(env.observation_space)
     print(env.action_space)
-    use_wandb = True
+    use_wandb = False
     ddpg = DDPG(env=env, test_env=env, config=config, use_wandb=use_wandb)
     ddpg.train_loop()
 

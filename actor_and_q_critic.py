@@ -1,11 +1,14 @@
 import collections
 import os
+import random
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Normal
+
+from quanser_env import QuanserEnv
 
 CURRENT_PATH = os.path.dirname(os.path.realpath(__file__))
 MODEL_DIR = os.path.join(CURRENT_PATH, "models")
@@ -43,6 +46,20 @@ class Actor(nn.Module):
             action = action + noises
 
         action = np.clip(action, a_min=-1., a_max=1.)
+
+        return action
+
+    def get_action_e(self, env: QuanserEnv, x: torch.Tensor, step: int, epsilon_start: float = 1.0, epsilon_end: float = 0.05, epsilon_decay: int = 10000) -> np.ndarray:
+        epsilon = epsilon_end + (epsilon_start - epsilon_end) * max(0, (epsilon_decay - step) / epsilon_decay)
+
+        if random.random() < epsilon:
+            action = np.array(env.action_space.sample())
+        else:
+            mu_v = self.forward(x)
+
+            action = mu_v.detach().numpy()
+        action = np.clip(action, a_min=-1., a_max=1.)
+        # print("EPSILON: ", epsilon)
 
         return action
 
