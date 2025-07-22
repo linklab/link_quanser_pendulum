@@ -5,3 +5,5 @@ wandb-metadata.json
 *.log
 *.wandb
 *.txt
+*.json
+*.yaml
