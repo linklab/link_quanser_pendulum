@@ -25,6 +25,7 @@ class Actor(nn.Module):
         self.fc1 = nn.Linear(n_features, 128)
         self.fc2 = nn.Linear(128, 128)
         self.out = nn.Linear(128, n_actions)
+        self.epsilon = None
         self.to(DEVICE)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -36,13 +37,13 @@ class Actor(nn.Module):
 
         return mu_v
 
-    def get_action(self, x: torch.Tensor, exploration: bool = True) -> np.ndarray:
+    def get_action(self, x: torch.Tensor, scale: float = 1.0, exploration: bool = True) -> np.ndarray:
         mu_v = self.forward(x)
 
         action = mu_v.detach().numpy()
 
         if exploration:
-            noises = np.random.normal(size=self.n_actions, loc=0, scale=1.0)
+            noises = np.random.normal(size=self.n_actions, loc=0, scale=scale)
             action = action + noises
 
         action = np.clip(action, a_min=-1., a_max=1.)
@@ -50,16 +51,15 @@ class Actor(nn.Module):
         return action
 
     def get_action_e(self, env: QuanserEnv, x: torch.Tensor, step: int, epsilon_start: float = 1.0, epsilon_end: float = 0.05, epsilon_decay: int = 10000) -> np.ndarray:
-        epsilon = epsilon_end + (epsilon_start - epsilon_end) * max(0, (epsilon_decay - step) / epsilon_decay)
+        self.epsilon = epsilon_end + (epsilon_start - epsilon_end) * max(0, (epsilon_decay - step) / epsilon_decay)
 
-        if random.random() < epsilon:
+        if random.random() < self.epsilon:
             action = np.array(env.action_space.sample())
         else:
             mu_v = self.forward(x)
 
             action = mu_v.detach().numpy()
         action = np.clip(action, a_min=-1., a_max=1.)
-        # print("EPSILON: ", epsilon)
 
         return action
 
@@ -72,19 +72,19 @@ class QCritic(nn.Module):
 
     def __init__(self, n_features: int = 5, n_actions: int = 1):
         super().__init__()
-        self.fc1 = nn.Linear(n_features, 128)
-        self.fc2 = nn.Linear(128 + n_actions, 128)
+        self.fc1 = nn.Linear(n_features + n_actions, 128)
+        self.fc2 = nn.Linear(128, 128)
         self.fc3 = nn.Linear(128, 1)
+        self.to(DEVICE)
 
     def forward(self, x, action) -> torch.Tensor:
         if isinstance(x, np.ndarray):
             x = torch.tensor(x, dtype=torch.float32, device=DEVICE)
-        x = F.relu(self.fc1(x))
         x = torch.cat([x, action], dim=-1)
+        x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-
 
 Transition = collections.namedtuple(
     typename="Transition", field_names=["observation", "action", "next_observation", "reward", "done"]
@@ -127,7 +127,7 @@ class ReplayBuffer:
 
         # Convert to tensor
         observations = torch.tensor(observations, dtype=torch.float32, device=DEVICE)
-        actions = torch.tensor(actions, dtype=torch.int64, device=DEVICE)
+        actions = torch.tensor(actions, dtype=torch.float32, device=DEVICE)
         next_observations = torch.tensor(next_observations, dtype=torch.float32, device=DEVICE)
         rewards = torch.tensor(rewards, dtype=torch.float32, device=DEVICE)
         dones = torch.tensor(dones, dtype=torch.bool, device=DEVICE)
