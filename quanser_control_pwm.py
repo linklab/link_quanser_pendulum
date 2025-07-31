@@ -1,4 +1,4 @@
-from quanser.hardware import HIL, MAX_STRING_LENGTH
+from quanser.hardware import HIL, MAX_STRING_LENGTH, HILError
 from array import array
 import numpy as np, time, math
 
@@ -24,9 +24,9 @@ def test_pwm(card):
 
         pwm_ch  = array('I',[0])
         samples = 1.0
-        Ts      = 0.1        # 1 kHz 루프
+        Ts      = 0.1      # 1 kHz 루프
         start = time.time()
-        for k in range(samples):
+        for k in range(3000):
             card.read_encoder(enc_ch, 1, enc_val)
             count = enc_val[0] - bias_count   # 오프셋 보정
 
@@ -34,13 +34,17 @@ def test_pwm(card):
             alpha_deg = alpha * 180/math.pi
 
             print(f"motor α = {alpha_deg:+.1f} °")
-            if k % 2 == 0:
-                duty = 0.15
+            if k % 6 < 3:
+                duty = 0.12
             else:
-                duty = -0.15
+                duty = -0.12
             card.write_pwm(pwm_ch, 1, array('d',[duty]))
             time.sleep(Ts)
         print(f"Elapsed time: {time.time() - start:.2f} sec")
+
+    except HILError as e:
+        print(e.error_code)
+        print(e.get_error_message())
 
     finally:
         card.write_pwm(array('I',[0]),1,array('d',[0.0]))
@@ -101,6 +105,10 @@ def reset(card):
             time.sleep(Ts)
         print(f"Elapsed time: {time.time() - start:.2f} sec")
 
+    except HILError as e:
+        print(e.error_code)
+        print(e.get_error_message())
+
     finally:
         # ⑤ 모터 정지 및 앰프 OFF
         card.write_pwm(array('I', [0]), 1, array('d', [0.0]))
@@ -110,8 +118,8 @@ def reset(card):
 def main():
     card = HIL("qube_servo3_usb", "0")
 
-    # test_pwm(card=card)  # -0.1, 0.1 duty 반복 제어 및 현재 모터 각도 출력
-    reset(card=card)
+    test_pwm(card=card)  # -0.1, 0.1 duty 반복 제어 및 현재 모터 각도 출력
+    # reset(card=card)
     card.close()
 if __name__ == "__main__":
     main()

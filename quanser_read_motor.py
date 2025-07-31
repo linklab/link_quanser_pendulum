@@ -1,4 +1,4 @@
-from quanser.hardware import HIL
+from quanser.hardware import HIL, HILError
 from array   import array
 import time
 import math
@@ -23,6 +23,9 @@ def read_motor_angle(card):
             print(f"motor radian = {alpha:+.1f} rad")
             print(f"motor α = {alpha_deg:+.1f} °")
             time.sleep(0.5)
+    except HILError as e:
+        print(e.error_code)
+        print(e.get_error_message())
 
     finally:
         pass
