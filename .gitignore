@@ -7,3 +7,5 @@ wandb-metadata.json
 *.txt
 *.json
 *.yaml
+venv/
+wandb/
