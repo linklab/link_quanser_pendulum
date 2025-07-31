@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F
 import torch.nn.init as init
 import torch.optim as optim
-from actor_and_q_critic import MODEL_DIR, Actor, QCritic, ReplayBuffer, Transition
+from actor_and_q_critic import DEVICE, MODEL_DIR, Actor, QCritic, ReplayBuffer, Transition
 
 import wandb
 
@@ -52,7 +52,7 @@ class DDPG:
         self.use_wandb = use_wandb
 
         self.env_name = config["env_name"]
-        custom_name = "hz_0_02_scale_0_3"
+        custom_name = "hz_0_04_scale_0_3"
         self.current_time = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M%S_") + custom_name
 
         if use_wandb:
@@ -320,7 +320,7 @@ def main():
         "gamma": 0.999,                                      # 감가율
         "soft_update_tau": 0.995,                           # DDPG Soft Update Tau
         "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
-        "episode_reward_avg_solved": 200.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "episode_reward_avg_solved": 250.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
         "epsilon_start": 1.0,
         "epsilon_end": 0.05,
         "epsilon_decay": 50_000,

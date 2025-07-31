@@ -32,8 +32,8 @@ class QuanserEnv(gym.Env):
         self.led_channels = np.array([11000, 11001, 11002], dtype=np.uint32)
 
         # encoder value buffer
-        self.motor_enc_val = array('l', [0])
-        self.pend_enc_val = array('l', [0])
+        self.motor_enc_val = array('i', [0])
+        self.pend_enc_val = array('i', [0])
 
         # control params
         self.Ts = 0.01            # control timestep [s]
@@ -170,8 +170,8 @@ class QuanserEnv(gym.Env):
     def noramlize_observation(self, observation):
         motor_angle_n = observation[0] / 1.8
         pendulum_angle_n = observation[1] / math.pi
-        motor_angle_vel_n = observation[2] / 20.0
-        pendulum_angle_vel_n = observation[3] / 20.0
+        motor_angle_vel_n = observation[2] / 25.0
+        pendulum_angle_vel_n = observation[3] / 25.0
         last_action_n = observation[4]
         observation_n = torch.tensor([motor_angle_n, pendulum_angle_n, motor_angle_vel_n, pendulum_angle_vel_n, last_action_n], dtype=torch.float32)
         return observation_n
@@ -227,7 +227,7 @@ class QuanserEnv(gym.Env):
 
                 # PD 제어
                 duty = self.Kp * 2 * error_rad - self.Kd * 0.5 * omega
-                duty = max(min(duty, 0.03), -0.03)  # PWM 제한 [-0.03, +0.03]
+                duty = max(min(duty, 0.1), -0.1)  # PWM 제한 [-0.03, +0.03]
 
                 self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
                 time.sleep(0.01)
@@ -268,7 +268,7 @@ class QuanserEnv(gym.Env):
         self.last_action = actions.item()
 
         # wait for control period
-        while (time.perf_counter() - self.step_time) < 0.02:
+        while (time.perf_counter() - self.step_time) < 0.04:
             time.sleep(0.001)
         # =====================================================
 
@@ -279,7 +279,6 @@ class QuanserEnv(gym.Env):
         gamma = self._get_pendulum_velocity(current=pend_angle)
         next_obs = torch.tensor([motor_angle, pend_angle, next_omega, gamma, last_pwm], dtype=torch.float32)
         next_obs = self.noramlize_observation(next_obs)
-
         # print("\nn_motor_angle: ", next_obs[0].item())
         # print("n_pendulum_angle: ", next_obs[1].item())
         # print("n_motor_vel: ", next_obs[2].item())
@@ -287,13 +286,16 @@ class QuanserEnv(gym.Env):
         # print("n_last_action: ", next_obs[4].item())
 
         raw_diff = pend_angle
-        # if abs(raw_diff) < 0.1:
-        #     plus_rew = raw_diff
-        # else:
-        #     plus_rew = 0.0
-        # reward = abs(raw_diff) + plus_rew ** 2
-        reward = abs(raw_diff)**2
-        reward /= (math.pi)**2
+        if abs(raw_diff) > 3.1:
+            bonus_rew =  0.1
+        else:
+            bonus_rew = 0.0
+
+        print("pend angle:", raw_diff)
+        dense_rew = -math.cos(raw_diff) # [-1.0, 1.0]
+        sparse_rew = bonus_rew # 0.0 or 0.1
+        penalty = -0.001 * abs(next_omega) # [-0.025, 0.0]
+        reward  = dense_rew + sparse_rew + penalty
 
         # termination: motor angle exceeds ±90°
         if abs(math.degrees(motor_angle)) > 80.0:
@@ -303,8 +305,6 @@ class QuanserEnv(gym.Env):
             self.gamma_over_count += 1
             print("GAMMA OVER: ", gamma)
             terminated = True
-            if self.gamma_over_count == 1:
-                initailize_pen = True
 
         # if abs(gamma) > 80:
         #     print(gamma, "!!!!!!!!!!!")
@@ -315,7 +315,6 @@ class QuanserEnv(gym.Env):
 
         # truncation: max steps reached
         truncated = self.step_count >= self.max_steps
-
         info = {}
 
         if terminated or truncated:
@@ -327,6 +326,9 @@ class QuanserEnv(gym.Env):
             omega = 0.0
             while True:
                 reset_counter += 1
+                # prevent infinite loop
+                if reset_counter > 1000:
+                    break
                 self.card.read_encoder(self.motor_enc_ch, 1, self.motor_enc_val)
                 cur_rad = (self.motor_enc_val[0] - self.init_count) * 2 * math.pi / 2048.0
                 error_rad = target_angle - cur_rad
@@ -347,6 +349,7 @@ class QuanserEnv(gym.Env):
                 prev_rad = cur_rad
 
                 duty = self.Kp * 2 * error_rad - self.Kd * 0.5 * omega
+
                 # PD 제어
                 if reset_counter < 4:
                     duty = max(min(duty, 0.2), -0.2)

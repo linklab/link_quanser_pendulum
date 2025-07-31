@@ -31,6 +31,8 @@ class Actor(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if isinstance(x, np.ndarray):
             x = torch.tensor(x, dtype=torch.float32, device=DEVICE)
+        elif isinstance(x, torch.Tensor):
+            x = x.to(DEVICE)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         mu_v = F.tanh(self.out(x))
@@ -40,7 +42,7 @@ class Actor(nn.Module):
     def get_action(self, x: torch.Tensor, scale: float = 1.0, exploration: bool = True) -> np.ndarray:
         mu_v = self.forward(x)
 
-        action = mu_v.detach().numpy()
+        action = mu_v.detach().cpu().numpy()
 
         if exploration:
             noises = np.random.normal(size=self.n_actions, loc=0, scale=scale)
