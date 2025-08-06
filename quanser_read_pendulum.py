@@ -4,9 +4,12 @@ from quanser.hardware import HIL, HILError, MAX_STRING_LENGTH
 
 # ---- 하드웨어/펌듈럼 기본 매개변수 ----
 PEND_CH          = array('I', [1])      # Qube‑Servo 3: 펜듈럼 인코더 = 채널 1
+TACH_CH  = array('I', [14001])
 ENC_RESOLUTION   = 2048                 # counts / rev  (사양표)
 PWM_SCALE        = 0.0                  # 초기화 루프에선 모터 OFF
-DT               = 0.01                 # 10 ms  (Windows라면 10 ms 주기 정도가 현실적)
+DT               = 0.001                 # 10 ms  (Windows라면 10 ms 주기 정도가 현실적)
+enc_val = array('i', [0])
+tach_val = array('d', [0.0])
 
 def counts_to_rad(counts: int) -> float:
     """인코더 카운트를 라디안으로 변환"""
@@ -32,7 +35,6 @@ def read_pendulum(card: HIL,
     펜듈럼 각도(rad), 각속도(rad/s), 측정 시각(s)를 반환
     prev_* 가 None이면 각속도 = 0
     """
-    enc_val = array('l', [0])
     card.read_encoder(PEND_CH, len(PEND_CH), enc_val)
     angle = counts_to_rad(enc_val[0])
 
@@ -52,8 +54,7 @@ def main():
         # 1) 펜듈럼 영점 잡기 (필요하면 손으로 6 시 방향에 둔 뒤)
         print("펜듈럼 영점(6 시) 설정…")
         zero_pendulum_encoder(card)
-        time.sleep(0.1)
-        zero_pendulum_encoder(card)
+        time.sleep(1.0)  # 영점 잡는 동안 잠시 대기
         
         prev_angle = prev_time = None
 
@@ -64,12 +65,19 @@ def main():
             a += 1
             angle, omega, now = read_pendulum(card, prev_angle, prev_time)
             deg = math.degrees(angle)
-            print(f"θ = {deg:8.3f} deg   ω = {omega:8.3f} rad/s   raw cnt = {int(round(angle*ENC_RESOLUTION/(2*math.pi))):5d}")
+            card.read_other(TACH_CH, 1, tach_val)
+            print(f"θ = {deg%360:8.3f} deg   ω = {omega:8.3f} rad/s   raw cnt = {enc_val}")
+            tach_vel_rad = tach_val[0] * 2.0 * math.pi / 2048.0
+            # print("abs(omega - tach_vel_rad):", abs(omega - tach_vel_rad),)
 
             prev_angle, prev_time = angle, now
             time.sleep(DT)
-            if a % 100 == 0:
-                zero_pendulum_encoder(card)
+            # if a % 500 == 0:
+            #     card.close()
+            #     card = init_card()
+                # print("펜듈럼 영점 재설정…")
+                # zero_pendulum_encoder(card)
+                # time.sleep(1)
 
     except HILError as e:
         # Quanser API 호출 실패 시

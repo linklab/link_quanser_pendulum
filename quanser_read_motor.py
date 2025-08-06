@@ -7,6 +7,8 @@ def read_motor_angle(card):
     try:
         enc_ch  = array('I', [0])             # 모터 = 채널 0
         enc_val = array('i', [0])
+        tach_ch_motor    = array('I', [14000])  # 14000 = 0번 엔코더의 velocity
+        tach_val_motor   = array('d', [0.0])
 
         # ── (1) 첫 번째 읽기 → bias 저장 ───────────────────────────────
         card.read_encoder(enc_ch, 1, enc_val)
@@ -27,14 +29,17 @@ def read_motor_angle(card):
             else:
                 omega = 0.0
             alpha_deg = alpha * 180/math.pi
-            print("motor_vel:", omega)
+            card.read_other(tach_ch_motor, 1, tach_val_motor)
+            tach_vel_rad = tach_val_motor[0] * 2.0 * math.pi / 2048.0
+            # 타코 속도와 엔코더 속도 비교
+            print("motor_vel diff:", omega - tach_vel_rad)
             prev_alpha = alpha
             prev_t = curr_t
             # print("init count:", bias_count)
             print("motor count:", enc_val[0])
             # print(f"motor radian = {alpha:+.1f} rad")
-            # print(f"motor α = {alpha_deg:+.1f} °")
-            time.sleep(0.04)
+            print(f"motor α = {alpha_deg:+.1f} °")
+            time.sleep(0.004)
     except HILError as e:
         print(e.error_code)
         print(e.get_error_message())
