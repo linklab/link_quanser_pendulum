@@ -112,13 +112,13 @@ class DDPG:
         self.epsilon_decay = config["epsilon_decay"]
         self.training_start_steps = config["training_start_steps"]
 
-        self.actor = Actor(n_features=5, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (5,)
-        self.target_actor = Actor(n_features=5, n_actions=1)
+        self.actor = Actor(n_features=3, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (5,)
+        self.target_actor = Actor(n_features=3, n_actions=1)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
 
-        self.q_critic = QCritic(n_features=5, n_actions=1)
-        self.target_q_critic = QCritic(n_features=5, n_actions=1)
+        self.q_critic = QCritic(n_features=3, n_actions=1)
+        self.target_q_critic = QCritic(n_features=3, n_actions=1)
         self.target_q_critic.load_state_dict(self.q_critic.state_dict())
         self.q_critic_optimizer = optim.Adam(self.q_critic.parameters(), lr=self.learning_rate)
 
@@ -135,7 +135,7 @@ class DDPG:
 
         self.step_call_time = None
 
-        self.nosie_scale_scheduler = LinearNoiseScheduler(start_scale=1.0, end_scale=0.3, decay_steps=200_000)
+        self.nosie_scale_scheduler = LinearNoiseScheduler(start_scale=1.0, end_scale=0.8, decay_steps=500_000)
         # self.noise = OUNoise(size=1, mu=0.0, theta=0.3, sigma=0.3, dt=0.005)
 
     def train_loop(self) -> None:
@@ -147,14 +147,11 @@ class DDPG:
         episode_reward_lst = np.zeros(shape=(10,), dtype=float)
         episode_reward_avg = 0.0  # average per 10 episodes
         episode_num = 0
-        policy_loss_list = []
-        critic_loss_list = []
-        mu_v_list = []
         for n_episode in range(1, self.max_num_episodes + 1):
             episode_reward = 0
             episode_steps = 0
             episode_num += 1
-            observation = self.env.reset()
+            observation, _ = self.env.reset()
             done = False
             print("======EPISODE START====== ")
             step_call_time_deque = deque(maxlen=2000)
@@ -173,7 +170,7 @@ class DDPG:
                 #     action = self.actor.get_action(observation, scale=scale)
                     # action = self.actor.get_action_e(self.env, observation, self.time_steps, self.epsilon_start, self.epsilon_end, self.epsilon_decay)
                 # scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
-                scale = 0.5
+                scale = 1.0
                 action = self.actor.get_action(observation, scale=scale)
                 action_list.append(action.item())
 
@@ -191,14 +188,13 @@ class DDPG:
                 observation = next_observation
                 done = terminated or truncated
 
-                if self.time_steps > self.training_start_steps:
-                    policy_loss, critic_loss, mu_v = self.train()
-                    critic_loss_list.append(critic_loss)
-                    if self.training_time_steps % 2 == 0:
-                        policy_loss_list.append(policy_loss)
-                        mu_v_list.append(mu_v)
-                    self.training_time_steps += 1
-
+                # if not self.best_saved and episode_reward_avg > self.episode_reward_avg_solved:
+                #     self.best_count += 1
+                #     if self.best_count >= 10: # 10번 설정한 목표에 도달하면 학습 종료
+                #         print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
+                #         self.model_save(episode_reward_avg)
+                #         is_terminated = True
+                #         self.best_saved = True
             print("======EPISODE END====== ")
             episode_reward_lst[n_episode % 10] = episode_reward
             episode_reward_avg = np.average(episode_reward_lst)
@@ -206,8 +202,13 @@ class DDPG:
             # print(f"STEP CALL TIME DEQUE: {np.asarray(step_call_time_deque)}")
             # print(f"STEP CALL TIME MEAN: {np.mean(step_call_time_deque):.6f} sec")
 
-            if self.time_steps > self.training_start_steps and n_episode < 100:
-                for _ in range(500):
+            policy_loss_list = []
+            critic_loss_list = []
+            mu_v_list = []
+
+            if self.time_steps > self.training_start_steps:
+                training_num = np.max([episode_steps, 500])
+                for _ in range(training_num):
                     policy_loss, critic_loss, mu_v = self.train()
                     critic_loss_list.append(critic_loss)
                     if self.training_time_steps % 2 == 0:
@@ -223,7 +224,7 @@ class DDPG:
 
                 for i in range(3):
                     validation_episode_reward = 0
-                    observation = self.env.reset()
+                    observation, info = self.env.reset()
                     done = False
                     print("***********VALIDATION START*********** ")
                     while not done:
@@ -361,18 +362,17 @@ class DDPG:
 
 
 def main():
-    env = QuanserEnv(card)
-
+    env = gym.make('Pendulum-v1')
     config = {
-        "env_name": "quanser",                              # 환경의 이름
+        "env_name": "Pendulum-v1",                              # 환경의 이름
         "max_num_episodes": 200_000,                        # 훈련을 위한 최대 에피소드 횟수
         "batch_size": 256,                                  # 훈련시 배치에서 한번에 가져오는 랜덤 배치 사이즈
         "replay_buffer_size": 200_000,                    # 리플레이 버퍼 사이즈
-        "learning_rate": 0.0003,                            # 학습율
+        "learning_rate": 0.0002,                            # 학습율
         "gamma": 0.999,                                      # 감가율
-        "soft_update_tau": 0.995,                           # DDPG Soft Update Tau
+        "soft_update_tau": 0.9975,                           # DDPG Soft Update Tau
         "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
-        "episode_reward_avg_solved": 3500.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "episode_reward_avg_solved": 1500.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
         "epsilon_start": 1.0,
         "epsilon_end": 0.05,
         "epsilon_decay": 100_000,

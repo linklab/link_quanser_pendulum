@@ -84,15 +84,15 @@ class LinearNoiseScheduler:
         return self.start + frac * (self.end - self.start)
 
 
-class DDPG:
+class TD3:
     def __init__(self, env: gym.Env, test_env: gym.Env, config: dict, use_wandb: bool):
         self.env = env
         self.test_env = test_env
         self.use_wandb = use_wandb
 
         self.env_name = config["env_name"]
-        custom_name = "hz_0_06_scale_0_13"
-        self.current_time = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M%S_") + custom_name
+        custom_name = "td3"
+        self.current_time = custom_name + datetime.now().astimezone().strftime("%Y-%m-%d_%H%M%S_")
 
         if use_wandb:
             self.wandb = wandb.init(project="DDPG_{0}".format(self.env_name), name=self.current_time, config=config)
@@ -117,25 +117,28 @@ class DDPG:
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
 
-        self.q_critic = QCritic(n_features=5, n_actions=1)
-        self.target_q_critic = QCritic(n_features=5, n_actions=1)
-        self.target_q_critic.load_state_dict(self.q_critic.state_dict())
-        self.q_critic_optimizer = optim.Adam(self.q_critic.parameters(), lr=self.learning_rate)
+        self.q_critic_1 = QCritic(n_features=5, n_actions=1)
+        self.target_q_critic_1 = QCritic(n_features=5, n_actions=1)
+        self.target_q_critic_1.load_state_dict(self.q_critic_1.state_dict())
+        self.q_critic_1_optimizer = optim.Adam(self.q_critic_1.parameters(), lr=self.learning_rate)
+
+        self.q_critic_2 = QCritic(n_features=5, n_actions=1)
+        self.target_q_critic_2 = QCritic(n_features=5, n_actions=1)
+        self.target_q_critic_2.load_state_dict(self.q_critic_2.state_dict())
+        self.q_critic_2_optimizer = optim.Adam(self.q_critic_2.parameters(), lr=self.learning_rate)
 
         self.replay_buffer = ReplayBuffer(capacity=self.replay_buffer_size)
 
         self.time_steps = 0
         self.training_time_steps = 0
 
-        self.best_count = 0 # 설정한 목표에 도달한 횟수
-        self.best_saved = False
 
         self.total_train_start_time = None
         self.train_start_time = None
 
         self.step_call_time = None
 
-        self.nosie_scale_scheduler = LinearNoiseScheduler(start_scale=1.0, end_scale=0.3, decay_steps=200_000)
+        self.nosie_scale_scheduler = LinearNoiseScheduler(start_scale=1.0, end_scale=0.1, decay_steps=50_000)
         # self.noise = OUNoise(size=1, mu=0.0, theta=0.3, sigma=0.3, dt=0.005)
 
     def train_loop(self) -> None:
@@ -147,10 +150,11 @@ class DDPG:
         episode_reward_lst = np.zeros(shape=(10,), dtype=float)
         episode_reward_avg = 0.0  # average per 10 episodes
         episode_num = 0
-        policy_loss_list = []
-        critic_loss_list = []
-        mu_v_list = []
         for n_episode in range(1, self.max_num_episodes + 1):
+            episode_training_steps = 0
+            policy_loss_list = []
+            critic_loss_list = []
+            mu_v_list = []
             episode_reward = 0
             episode_steps = 0
             episode_num += 1
@@ -159,8 +163,8 @@ class DDPG:
             print("======EPISODE START====== ")
             step_call_time_deque = deque(maxlen=2000)
             action_list = deque(maxlen=2000)
+            self.step_call_time = None
             while not done:
-                episode_steps += 1
                 self.train_start_time = time.time()
                 self.time_steps += 1
                 # action = torch.empty(1).uniform_(-1.0, 1.0)
@@ -172,15 +176,22 @@ class DDPG:
                 #     scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
                 #     action = self.actor.get_action(observation, scale=scale)
                     # action = self.actor.get_action_e(self.env, observation, self.time_steps, self.epsilon_start, self.epsilon_end, self.epsilon_decay)
-                # scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
-                scale = 0.5
-                action = self.actor.get_action(observation, scale=scale)
+                if n_episode < 50:
+                    scale = 2.0
+                else:
+                    scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
+                action = self.actor.get_action(observation, scale=scale, exploration=False)
+                if episode_steps % 5 == 0:
+                    noise = np.random.normal(size=1, loc=0.0, scale=scale)
+                action += noise
+                action = np.clip(action, a_min=-1.0, a_max=1.0)
                 action_list.append(action.item())
 
-                self.step_call_time = time.perf_counter()
                 next_observation, reward, terminated, truncated, _ = self.env.step(action)
-                step_call_time = time.perf_counter() - self.step_call_time
-                step_call_time_deque.append(step_call_time - 0.003)
+                if self.step_call_time is not None:
+                    step_call_time_error = time.perf_counter() - self.step_call_time
+                    step_call_time_deque.append(step_call_time_error - 0.006)
+                self.step_call_time = time.perf_counter()
 
                 episode_reward += reward
 
@@ -188,34 +199,56 @@ class DDPG:
 
                 self.replay_buffer.append(transition)
 
+                train_start_time = time.perf_counter()
                 observation = next_observation
                 done = terminated or truncated
-
-                if self.time_steps > self.training_start_steps:
-                    policy_loss, critic_loss, mu_v = self.train()
-                    critic_loss_list.append(critic_loss)
-                    if self.training_time_steps % 2 == 0:
-                        policy_loss_list.append(policy_loss)
-                        mu_v_list.append(mu_v)
-                    self.training_time_steps += 1
+                
+                episode_steps += 1
 
             print("======EPISODE END====== ")
             episode_reward_lst[n_episode % 10] = episode_reward
             episode_reward_avg = np.average(episode_reward_lst)
-            # step_call_time_deque.pop()
+            step_call_time_deque.pop()
             # print(f"STEP CALL TIME DEQUE: {np.asarray(step_call_time_deque)}")
-            # print(f"STEP CALL TIME MEAN: {np.mean(step_call_time_deque):.6f} sec")
+            print(f"STEP CALL TIME ERROR MEAN: {np.mean(step_call_time_deque):.6f} sec")
 
-            if self.time_steps > self.training_start_steps and n_episode < 100:
-                for _ in range(500):
+            if episode_reward > self.episode_reward_avg_solved - 200.0:
+                self.model_save(episode_reward)
+                for i in range(3):
+                    validation_episode_reward = 0
+                    observation = self.env.reset()
+                    done = False
+                    print("***********VALIDATION START*********** ")
+                    while not done:
+                        action = self.actor.get_action(observation, exploration=False)
+
+                        observation, reward, terminated, truncated, _ = self.env.step(action)
+
+                        validation_episode_reward += reward
+
+                        done = terminated or truncated
+
+                    validation_episode_reward_list.append(validation_episode_reward)
+                    print(f"Validation {i+1} reward: {validation_episode_reward}")
+                validation_episode_reward_mean = np.mean(validation_episode_reward_list)
+                print(f"[Validation Episode Reward Mean: {validation_episode_reward_mean}]")
+                if self.use_wandb:
+                    self.wandb.log({"[VALIDATION] Episode Reward": validation_episode_reward_mean})
+
+                if validation_episode_reward_mean > self.episode_reward_avg_solved:
+                    print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
+                    break
+
+            if self.time_steps >= self.training_start_steps:
+                iter_training_steps = np.max([episode_steps, 500])
+                for _ in range(iter_training_steps):
                     policy_loss, critic_loss, mu_v = self.train()
-                    critic_loss_list.append(critic_loss)
-                    if self.training_time_steps % 2 == 0:
+                    if policy_loss is not None:
                         policy_loss_list.append(policy_loss)
                         mu_v_list.append(mu_v)
-                    self.training_time_steps += 1
+                    critic_loss_list.append(critic_loss)
 
-            if n_episode % 50 == 0 and n_episode > 100:
+            if n_episode % 10 == 0 and n_episode > 100:
                 from array import array
                 green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
                 card.write_other(led_channels, len(led_channels), green_led_values)
@@ -242,11 +275,10 @@ class DDPG:
                 if self.use_wandb:
                     self.wandb.log({"[VALIDATION] Episode Reward": validation_episode_reward_mean})
 
-                if not self.best_saved and validation_episode_reward_mean > self.episode_reward_avg_solved:
+                if validation_episode_reward_mean > self.episode_reward_avg_solved:
                     print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
                     self.model_save(validation_episode_reward_mean)
                     is_terminated = True
-                    self.best_saved = True
 
             policy_loss_mean = np.mean(policy_loss_list)
             critic_loss_mean = np.mean(critic_loss_list)
@@ -308,28 +340,53 @@ class DDPG:
         )
 
     def train(self) -> tuple[float, float, float]:
+        self.training_time_steps += 1
         observations, actions, next_observations, rewards, dones = self.replay_buffer.sample(self.batch_size)
 
         # CRITIC UPDATE
-        q_values = self.q_critic(observations, actions).squeeze(dim=-1)
-        next_mu_v = self.target_actor(next_observations)
-        next_q_values = self.target_q_critic(next_observations, next_mu_v).squeeze(dim=-1)
-        next_q_values[dones] = 0.0
-        target_values = rewards.squeeze(dim=-1) + self.gamma * next_q_values
-        critic_loss = F.mse_loss(target_values.detach(), q_values)
-        self.q_critic_optimizer.zero_grad()
-        critic_loss.backward()
-        tnn_utils.clip_grad_norm_(self.q_critic.parameters(), max_norm=1.0)
-        self.q_critic_optimizer.step()
+        q_values_1 = self.q_critic_1(observations, actions).squeeze(dim=-1)
+        q_values_2 = self.q_critic_2(observations, actions).squeeze(dim=-1)
+        with torch.no_grad():
+            next_mu_v = self.target_actor(next_observations)
+            noise = (torch.randn_like(next_mu_v) * 0.2).clamp_(-0.5, 0.5)
+            next_mu_v = (next_mu_v + noise).clamp_(-1.0, 1.0)
+            next_target_q1 = self.target_q_critic_1(next_observations, next_mu_v).squeeze(dim=-1)
+            next_target_q2 = self.target_q_critic_2(next_observations, next_mu_v).squeeze(dim=-1)
+
+            next_target_q_min = torch.minimum(next_target_q1, next_target_q2)   # 또는 torch.min(next_q1, next_q2)
+
+            next_target_q_min[dones] = 0.0
+
+            target_values = rewards.squeeze(dim=-1) + self.gamma * next_target_q_min
+
+        critic_loss_1 = F.mse_loss(target_values, q_values_1)
+        self.q_critic_1_optimizer.zero_grad()
+        critic_loss_1.backward()
+        tnn_utils.clip_grad_norm_(self.q_critic_1.parameters(), max_norm=1.0)
+        self.q_critic_1_optimizer.step()
         self.soft_synchronize_models(
-            source_model=self.q_critic, target_model=self.target_q_critic, tau=self.soft_update_tau
+            source_model=self.q_critic_1, target_model=self.target_q_critic_1, tau=self.soft_update_tau
         )
 
-        if self.training_time_steps % 2 == 0:
+        critic_loss_2 = F.mse_loss(target_values, q_values_2)
+        self.q_critic_2_optimizer.zero_grad()
+        critic_loss_2.backward()
+        tnn_utils.clip_grad_norm_(self.q_critic_2.parameters(), max_norm=1.0)
+        self.q_critic_2_optimizer.step()
+        self.soft_synchronize_models(
+            source_model=self.q_critic_2, target_model=self.target_q_critic_2, tau=self.soft_update_tau
+        )
+
+        critic_loss = (critic_loss_1 + critic_loss_2) / 2.0
+
+        if self.training_time_steps  % 2 == 0:
+            for p in self.q_critic_1.parameters():  # grad 차단
+                p.requires_grad = False
+
             # ACTOR UPDATE
             mu_v = self.actor(observations)
             # with torch.no_grad():
-            q_v = self.q_critic(observations, mu_v)
+            q_v = self.q_critic_1(observations, mu_v)
             actor_objective = q_v.mean()
             actor_loss = -1.0 * actor_objective
 
@@ -337,6 +394,9 @@ class DDPG:
             actor_loss.backward()
             tnn_utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
             self.actor_optimizer.step()
+
+            for p in self.q_critic_1.parameters():  # grad 차단
+                p.requires_grad = True
 
             # sync, TAU: 0.995
             self.soft_synchronize_models(
@@ -353,12 +413,51 @@ class DDPG:
             target_model_state[k] = tau * target_model_state[k] + (1.0 - tau) * v
         target_model.load_state_dict(target_model_state)
 
-    def model_save(self, validation_episode_reward_avg: float) -> None:
-        filename = "ddpg_{0}_{1:4.1f}_{2}.pth".format(self.env_name, validation_episode_reward_avg, self.current_time)
-        torch.save(self.actor.state_dict(), os.path.join(MODEL_DIR, filename))
+    def model_save(self, val_reward_avg: float) -> None:
+        # 1) 경로 보장
+        os.makedirs(MODEL_DIR, exist_ok=True)
 
-        copyfile(src=os.path.join(MODEL_DIR, filename), dst=os.path.join(MODEL_DIR, "ddpg_{0}_latest.pth".format(self.env_name)))
+        # 2) 안전한 파일 이름 (콜론 제거)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename  = f"td3_{self.env_name}_{val_reward_avg:.1f}_actor_{timestamp}.pth"
+        filepath  = os.path.join(MODEL_DIR, filename)
 
+        # 3) 저장
+        torch.save(self.actor.state_dict(), filepath)
+
+        # 4) latest 복사
+        copyfile(filepath, os.path.join(MODEL_DIR, f"td3_{self.env_name}_actor_latest.pth"))
+
+        # 2) 안전한 파일 이름 (콜론 제거)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename  = f"td3_{self.env_name}_{val_reward_avg:.1f}_critic_1_{timestamp}.pth"
+        filepath  = os.path.join(MODEL_DIR, filename)
+
+        # 3) 저장
+        torch.save(self.q_critic_1.state_dict(), filepath)
+
+        # 4) latest 복사
+        copyfile(filepath, os.path.join(MODEL_DIR, f"td3_{self.env_name}_critic_1_latest.pth"))
+
+        # 2) 안전한 파일 이름 (콜론 제거)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename  = f"td3_{self.env_name}_{val_reward_avg:.1f}_critic_2_{timestamp}.pth"
+        filepath  = os.path.join(MODEL_DIR, filename)
+
+        # 3) 저장
+        torch.save(self.q_critic_2.state_dict(), filepath)
+
+        # 4) latest 복사
+        copyfile(filepath, os.path.join(MODEL_DIR, f"td3_{self.env_name}_critic_2_latest.pth"))
+
+def seed_everything(seed: int = 42):
+    os.environ["PYTHONHASHSEED"] = str(seed)     # 파이썬 해시 시드
+    random.seed(seed)                            # random 모듈
+    np.random.seed(seed)                         # NumPy
+    torch.manual_seed(seed)                      # CPU
+    torch.cuda.manual_seed_all(seed)             # 모든 GPU
+    torch.backends.cudnn.deterministic = True    # 알고리즘 고정
+    torch.backends.cudnn.benchmark = False       # 튜닝 비활성화
 
 def main():
     env = QuanserEnv(card)
@@ -367,34 +466,25 @@ def main():
         "env_name": "quanser",                              # 환경의 이름
         "max_num_episodes": 200_000,                        # 훈련을 위한 최대 에피소드 횟수
         "batch_size": 256,                                  # 훈련시 배치에서 한번에 가져오는 랜덤 배치 사이즈
-        "replay_buffer_size": 200_000,                    # 리플레이 버퍼 사이즈
-        "learning_rate": 0.0003,                            # 학습율
+        "replay_buffer_size": 100_000,                    # 리플레이 버퍼 사이즈
+        "learning_rate": 0.0005,                            # 학습율
         "gamma": 0.999,                                      # 감가율
-        "soft_update_tau": 0.995,                           # DDPG Soft Update Tau
+        "soft_update_tau": 0.998,                           # td3 Soft Update Tau
         "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
-        "episode_reward_avg_solved": 3500.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "episode_reward_avg_solved": 4000.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
         "epsilon_start": 1.0,
         "epsilon_end": 0.05,
         "epsilon_decay": 100_000,
         "training_start_steps": 256,
         "seed": 42
     }
-    random.seed(config["seed"])
-    # 2) NumPy 시드 설정
-    np.random.seed(config["seed"])
-    # 3) PyTorch 시드 설정
-    torch.manual_seed(config["seed"])
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(config["seed"])
-        # CuDNN을 결정론적으로 동작하도록 설정
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    seed_everything(config["seed"])
 
     print(env.observation_space)
     print(env.action_space)
     use_wandb = True
-    ddpg = DDPG(env=env, test_env=env, config=config, use_wandb=use_wandb)
-    ddpg.train_loop()
+    td3 = TD3(env=env, test_env=env, config=config, use_wandb=use_wandb)
+    td3.train_loop()
 
 if __name__ == "__main__":
     # try:
