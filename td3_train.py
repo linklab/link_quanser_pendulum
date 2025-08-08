@@ -27,43 +27,6 @@ from actor_and_q_critic import DEVICE, MODEL_DIR, Actor, QCritic, ReplayBuffer, 
 import wandb
 np.set_printoptions(precision=5, suppress=True)
 
-class OUNoise:
-    """
-    Ornstein-Uhlenbeck process
-        dX_t = θ (μ − X_t) dt + σ dW_t
-    """
-    def __init__(
-        self,
-        size: int,            # action dimension
-        mu: float = 0.0,      # long-term mean
-        theta: float = 0.15,  # mean-reversion speed
-        sigma: float = 0.2,   # volatility (stddev)
-        dt: float = 1e-2,     # time step (≈ 1 env step)
-        x0: np.ndarray | None = None
-    ) -> None:
-        self.size   = size
-        self.mu     = mu
-        self.theta  = theta
-        self.sigma  = sigma
-        self.dt     = dt
-        self.x_prev = np.zeros(self.size) if x0 is None else x0.copy()
-
-    def reset(self, x0: np.ndarray | None = None) -> None:
-        """에피소드 시작 시 호출."""
-        self.x_prev = np.zeros(self.size) if x0 is None else x0.copy()
-
-    def __call__(self) -> np.ndarray:
-        """한 스텝 분의 OU 노이즈를 반환."""
-        dW        = np.random.normal(size=self.size) * np.sqrt(self.dt)
-        x         = (
-            self.x_prev
-            + self.theta * (self.mu - self.x_prev) * self.dt
-            + self.sigma * dW
-        )
-        self.x_prev = x
-        return x
-
-
 class LinearNoiseScheduler:
     def __init__(self, start_scale: float, end_scale: float, decay_steps: int):
         """
@@ -138,8 +101,7 @@ class TD3:
 
         self.step_call_time = None
 
-        self.nosie_scale_scheduler = LinearNoiseScheduler(start_scale=1.0, end_scale=0.1, decay_steps=50_000)
-        # self.noise = OUNoise(size=1, mu=0.0, theta=0.3, sigma=0.3, dt=0.005)
+        self.nosie_scale_scheduler = LinearNoiseScheduler(start_scale=1.0, end_scale=0.1, decay_steps=100_000)
 
     def train_loop(self) -> None:
         self.total_train_start_time = time.time()
@@ -147,35 +109,22 @@ class TD3:
         policy_loss = critic_loss = mu_v = 0.0
 
         is_terminated = False
-        episode_reward_lst = np.zeros(shape=(10,), dtype=float)
-        episode_reward_avg = 0.0  # average per 10 episodes
-        episode_num = 0
         for n_episode in range(1, self.max_num_episodes + 1):
-            episode_training_steps = 0
             policy_loss_list = []
             critic_loss_list = []
             mu_v_list = []
             episode_reward = 0
             episode_steps = 0
-            episode_num += 1
-            observation = self.env.reset()
             done = False
-            print("======EPISODE START====== ")
             step_call_time_deque = deque(maxlen=2000)
             action_list = deque(maxlen=2000)
             self.step_call_time = None
+
+            observation = self.env.reset()
+            print("======EPISODE START====== ")
             while not done:
                 self.train_start_time = time.time()
                 self.time_steps += 1
-                # action = torch.empty(1).uniform_(-1.0, 1.0)
-                # action = torch.zeros(1)
-                # if self.time_steps < self.training_start_steps:
-                #     action = np.array(self.env.action_space.sample())
-                #     action = np.clip(action, a_min=-1., a_max=1.)
-                # else:
-                #     scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
-                #     action = self.actor.get_action(observation, scale=scale)
-                    # action = self.actor.get_action_e(self.env, observation, self.time_steps, self.epsilon_start, self.epsilon_end, self.epsilon_decay)
                 if n_episode < 50:
                     scale = 2.0
                 else:
@@ -199,45 +148,18 @@ class TD3:
 
                 self.replay_buffer.append(transition)
 
-                train_start_time = time.perf_counter()
                 observation = next_observation
                 done = terminated or truncated
                 
                 episode_steps += 1
 
             print("======EPISODE END====== ")
-            episode_reward_lst[n_episode % 10] = episode_reward
-            episode_reward_avg = np.average(episode_reward_lst)
             step_call_time_deque.pop()
             # print(f"STEP CALL TIME DEQUE: {np.asarray(step_call_time_deque)}")
             print(f"STEP CALL TIME ERROR MEAN: {np.mean(step_call_time_deque):.6f} sec")
 
-            if episode_reward > self.episode_reward_avg_solved - 200.0:
-                self.model_save(episode_reward)
-                for i in range(3):
-                    validation_episode_reward = 0
-                    observation = self.env.reset()
-                    done = False
-                    print("***********VALIDATION START*********** ")
-                    while not done:
-                        action = self.actor.get_action(observation, exploration=False)
-
-                        observation, reward, terminated, truncated, _ = self.env.step(action)
-
-                        validation_episode_reward += reward
-
-                        done = terminated or truncated
-
-                    validation_episode_reward_list.append(validation_episode_reward)
-                    print(f"Validation {i+1} reward: {validation_episode_reward}")
-                validation_episode_reward_mean = np.mean(validation_episode_reward_list)
-                print(f"[Validation Episode Reward Mean: {validation_episode_reward_mean}]")
-                if self.use_wandb:
-                    self.wandb.log({"[VALIDATION] Episode Reward": validation_episode_reward_mean})
-
-                if validation_episode_reward_mean > self.episode_reward_avg_solved:
-                    print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
-                    break
+            if episode_reward > self.episode_reward_avg_solved - 300.0:
+                is_terminated = self.validate()
 
             if self.time_steps >= self.training_start_steps:
                 iter_training_steps = np.max([episode_steps, 500])
@@ -252,33 +174,8 @@ class TD3:
                 from array import array
                 green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
                 card.write_other(led_channels, len(led_channels), green_led_values)
-                validation_episode_reward_list = []
+                is_terminated = self.validate()
 
-                for i in range(3):
-                    validation_episode_reward = 0
-                    observation = self.env.reset()
-                    done = False
-                    print("***********VALIDATION START*********** ")
-                    while not done:
-                        action = self.actor.get_action(observation, exploration=False)
-
-                        observation, reward, terminated, truncated, _ = self.env.step(action)
-
-                        validation_episode_reward += reward
-
-                        done = terminated or truncated
-
-                    validation_episode_reward_list.append(validation_episode_reward)
-                    print(f"Validation {i+1} reward: {validation_episode_reward}")
-                validation_episode_reward_mean = np.mean(validation_episode_reward_list)
-                print(f"[Validation Episode Reward Mean: {validation_episode_reward_mean}]")
-                if self.use_wandb:
-                    self.wandb.log({"[VALIDATION] Episode Reward": validation_episode_reward_mean})
-
-                if validation_episode_reward_mean > self.episode_reward_avg_solved:
-                    print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
-                    self.model_save(validation_episode_reward_mean)
-                    is_terminated = True
 
             policy_loss_mean = np.mean(policy_loss_list)
             critic_loss_mean = np.mean(critic_loss_list)
@@ -347,13 +244,16 @@ class TD3:
         q_values_1 = self.q_critic_1(observations, actions).squeeze(dim=-1)
         q_values_2 = self.q_critic_2(observations, actions).squeeze(dim=-1)
         with torch.no_grad():
+            # target policy smoothing
             next_mu_v = self.target_actor(next_observations)
             noise = (torch.randn_like(next_mu_v) * 0.2).clamp_(-0.5, 0.5)
             next_mu_v = (next_mu_v + noise).clamp_(-1.0, 1.0)
+
             next_target_q1 = self.target_q_critic_1(next_observations, next_mu_v).squeeze(dim=-1)
             next_target_q2 = self.target_q_critic_2(next_observations, next_mu_v).squeeze(dim=-1)
 
-            next_target_q_min = torch.minimum(next_target_q1, next_target_q2)   # 또는 torch.min(next_q1, next_q2)
+            # prevent overestimate Q-values
+            next_target_q_min = torch.minimum(next_target_q1, next_target_q2)
 
             next_target_q_min[dones] = 0.0
 
@@ -379,13 +279,13 @@ class TD3:
 
         critic_loss = (critic_loss_1 + critic_loss_2) / 2.0
 
+        # delayed policy update 
         if self.training_time_steps  % 2 == 0:
             for p in self.q_critic_1.parameters():  # grad 차단
                 p.requires_grad = False
 
             # ACTOR UPDATE
             mu_v = self.actor(observations)
-            # with torch.no_grad():
             q_v = self.q_critic_1(observations, mu_v)
             actor_objective = q_v.mean()
             actor_loss = -1.0 * actor_objective
@@ -406,7 +306,7 @@ class TD3:
         else:
             return None, critic_loss.item(), None
 
-    def soft_synchronize_models(self, source_model, target_model, tau):
+    def soft_synchronize_models(self, source_model, target_model, tau) -> None:
         source_model_state = source_model.state_dict()
         target_model_state = target_model.state_dict()
         for k, v in source_model_state.items():
@@ -414,43 +314,69 @@ class TD3:
         target_model.load_state_dict(target_model_state)
 
     def model_save(self, val_reward_avg: float) -> None:
-        # 1) 경로 보장
+        # check model directory path
         os.makedirs(MODEL_DIR, exist_ok=True)
 
-        # 2) 안전한 파일 이름 (콜론 제거)
+        # save actor
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename  = f"td3_{self.env_name}_{val_reward_avg:.1f}_actor_{timestamp}.pth"
         filepath  = os.path.join(MODEL_DIR, filename)
 
-        # 3) 저장
         torch.save(self.actor.state_dict(), filepath)
 
-        # 4) latest 복사
         copyfile(filepath, os.path.join(MODEL_DIR, f"td3_{self.env_name}_actor_latest.pth"))
 
-        # 2) 안전한 파일 이름 (콜론 제거)
+        # save critic 1
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename  = f"td3_{self.env_name}_{val_reward_avg:.1f}_critic_1_{timestamp}.pth"
         filepath  = os.path.join(MODEL_DIR, filename)
 
-        # 3) 저장
         torch.save(self.q_critic_1.state_dict(), filepath)
 
-        # 4) latest 복사
         copyfile(filepath, os.path.join(MODEL_DIR, f"td3_{self.env_name}_critic_1_latest.pth"))
 
-        # 2) 안전한 파일 이름 (콜론 제거)
+        # save critic 2
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename  = f"td3_{self.env_name}_{val_reward_avg:.1f}_critic_2_{timestamp}.pth"
         filepath  = os.path.join(MODEL_DIR, filename)
 
-        # 3) 저장
         torch.save(self.q_critic_2.state_dict(), filepath)
 
-        # 4) latest 복사
         copyfile(filepath, os.path.join(MODEL_DIR, f"td3_{self.env_name}_critic_2_latest.pth"))
 
-def seed_everything(seed: int = 42):
+    def validate(self) -> bool:
+        is_terminated = False
+        validation_episode_reward_list = []
+
+        for i in range(3):
+            validation_episode_reward = 0
+            observation = self.env.reset()
+            done = False
+            print("***********VALIDATION START*********** ")
+            while not done:
+                action = self.actor.get_action(observation, exploration=False)
+
+                observation, reward, terminated, truncated, _ = self.env.step(action)
+
+                validation_episode_reward += reward
+
+                done = terminated or truncated
+
+            validation_episode_reward_list.append(validation_episode_reward)
+            print(f"Validation {i+1} reward: {validation_episode_reward}")
+        validation_episode_reward_mean = np.mean(validation_episode_reward_list)
+        print(f"[Validation Episode Reward Mean: {validation_episode_reward_mean}]")
+        if self.use_wandb:
+            self.wandb.log({"[VALIDATION] Episode Reward": validation_episode_reward_mean})
+
+        if validation_episode_reward_mean > self.episode_reward_avg_solved:
+            print("Solved in {0:,} time steps ({1:,} training steps)!".format(self.time_steps, self.training_time_steps))
+            self.model_save(validation_episode_reward_mean)
+            is_terminated = True
+        return is_terminated
+        
+
+def seed_everything(seed: int = 42) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)     # 파이썬 해시 시드
     random.seed(seed)                            # random 모듈
     np.random.seed(seed)                         # NumPy
@@ -471,7 +397,7 @@ def main():
         "gamma": 0.999,                                      # 감가율
         "soft_update_tau": 0.998,                           # td3 Soft Update Tau
         "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
-        "episode_reward_avg_solved": 4000.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "episode_reward_avg_solved": 3950.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
         "epsilon_start": 1.0,
         "epsilon_end": 0.05,
         "epsilon_decay": 100_000,
@@ -487,16 +413,4 @@ def main():
     td3.train_loop()
 
 if __name__ == "__main__":
-    # try:
-    #     main(card)
-    # except KeyboardInterrupt:
-    #     print("\n###User end###")
-    # finally:
-    #     print("###HIL card disconnect###")
-    #     try:
-    #         card.close()
-    #     except Exception as e:
-    #         print(f"Error occured in card.close(): {e}")
-    #     print("###program end###")
-    #     sys.exit(0)
     main()
