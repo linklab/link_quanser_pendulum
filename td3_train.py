@@ -75,7 +75,7 @@ class TD3:
         self.epsilon_decay = config["epsilon_decay"]
         self.training_start_steps = config["training_start_steps"]
 
-        self.actor = Actor(n_features=5, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (5,)
+        self.actor = Actor(n_features=5, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (7,)
         self.target_actor = Actor(n_features=5, n_actions=1)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
@@ -122,6 +122,7 @@ class TD3:
 
             observation = self.env.reset()
             print("======EPISODE START====== ")
+            episode_start_time = time.time()
             while not done:
                 self.train_start_time = time.time()
                 self.time_steps += 1
@@ -129,6 +130,8 @@ class TD3:
                     scale = 2.0
                 else:
                     scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
+                # scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
+                # scale = 0.3
                 action = self.actor.get_action(observation, scale=scale, exploration=False)
                 if episode_steps % 5 == 0:
                     noise = np.random.normal(size=1, loc=0.0, scale=scale)
@@ -139,7 +142,7 @@ class TD3:
                 next_observation, reward, terminated, truncated, _ = self.env.step(action)
                 if self.step_call_time is not None:
                     step_call_time_error = time.perf_counter() - self.step_call_time
-                    step_call_time_deque.append(step_call_time_error - 0.006)
+                    step_call_time_deque.append(step_call_time_error - 0.003)
                 self.step_call_time = time.perf_counter()
 
                 episode_reward += reward
@@ -154,9 +157,11 @@ class TD3:
                 episode_steps += 1
 
             print("======EPISODE END====== ")
-            step_call_time_deque.pop()
-            # print(f"STEP CALL TIME DEQUE: {np.asarray(step_call_time_deque)}")
-            print(f"STEP CALL TIME ERROR MEAN: {np.mean(step_call_time_deque):.6f} sec")
+            episode_time = time.time() - episode_start_time
+            if len(step_call_time_deque) > 0:
+                step_call_time_deque.pop()
+                # print(f"STEP CALL TIME DEQUE: {np.asarray(step_call_time_deque)}")
+                print(f"STEP CALL TIME ERROR MEAN: {np.mean(step_call_time_deque):.6f} sec")
 
             if episode_reward > self.episode_reward_avg_solved - 300.0:
                 is_terminated = self.validate()
@@ -170,12 +175,11 @@ class TD3:
                         mu_v_list.append(mu_v)
                     critic_loss_list.append(critic_loss)
 
-            if n_episode % 10 == 0 and n_episode > 100:
+            if n_episode % 50 == 0 and n_episode > 100:
                 from array import array
                 green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
                 card.write_other(led_channels, len(led_channels), green_led_values)
                 is_terminated = self.validate()
-
 
             policy_loss_mean = np.mean(policy_loss_list)
             critic_loss_mean = np.mean(critic_loss_list)
@@ -189,6 +193,7 @@ class TD3:
                     "\nCritic Loss: {:>7.3f},".format(critic_loss_mean),
                     "\nTraining Steps: {:5,}, ".format(self.training_time_steps),
                     "\nTraining Time: {}, \n".format(time.strftime("%H:%M:%S", time.gmtime(time.time() - self.train_start_time))),
+                    "\nEpisode Time: {}, \n".format(time.strftime("%H:%M:%S", time.gmtime(episode_time))),
                 )
                 print("####################################################################################")
 
@@ -200,7 +205,8 @@ class TD3:
                     mu_v_mean,
                     n_episode,
                     scale,
-                    action_list
+                    action_list,
+                    self.time_steps
                 )
 
             if is_terminated:
@@ -220,7 +226,8 @@ class TD3:
         mu_v: float,
         n_episode: float,
         scale: float,
-        action_list: deque
+        action_list: deque,
+        total_steps: int
     ) -> None:
         self.wandb.log(
             {
@@ -231,6 +238,7 @@ class TD3:
                 "[TRAIN] Replay buffer": self.replay_buffer.size(),
                 "[TRAIN] Noise Scale": scale,
                 "[TRAIN] EPISODE ACTION MEAN": np.mean(action_list),
+                "[TRAIN] Total Steps": total_steps,
                 "Training Episode": n_episode,
                 "Training Steps": self.training_time_steps,
             }
@@ -295,7 +303,7 @@ class TD3:
             tnn_utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
             self.actor_optimizer.step()
 
-            for p in self.q_critic_1.parameters():  # grad 차단
+            for p in self.q_critic_1.parameters():
                 p.requires_grad = True
 
             # sync, TAU: 0.995
@@ -397,7 +405,7 @@ def main():
         "gamma": 0.999,                                      # 감가율
         "soft_update_tau": 0.998,                           # td3 Soft Update Tau
         "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
-        "episode_reward_avg_solved": 3950.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
+        "episode_reward_avg_solved": 4000.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
         "epsilon_start": 1.0,
         "epsilon_end": 0.05,
         "epsilon_decay": 100_000,
