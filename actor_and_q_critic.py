@@ -16,6 +16,7 @@ if not os.path.exists(MODEL_DIR):
     os.mkdir(MODEL_DIR)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# DEVICE = torch.device("cpu")
 
 def init_weights_pendulum(m: nn.Module):
     if isinstance(m, nn.Linear):
@@ -31,8 +32,6 @@ class Actor(nn.Module):
 
         self.fc1 = nn.Linear(n_features, 256)
         self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 256)
-        self.fc4 = nn.Linear(256, 256)
         self.out = nn.Linear(256, n_actions)
 
         self.apply(init_weights_pendulum)
@@ -50,8 +49,6 @@ class Actor(nn.Module):
             x = x.to(DEVICE)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        x = F.relu(self.fc4(x))
         mu_v = F.tanh(self.out(x))
 
         return mu_v
@@ -113,7 +110,6 @@ class QCritic(nn.Module):
             x = torch.tensor(x, dtype=torch.float32, device=DEVICE)
         x = self.fc1(x)
         x = self.ln1(x)
-        x = F.relu(x)
         x = torch.cat([x, action], dim=-1)
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))

@@ -102,6 +102,8 @@ class QuanserEnv(gym.Env):
         # get initial motor count
         self._reset_init_count()
 
+        self.step_time = None
+
     def observation_space(self):
         return self.observation_space
 
@@ -201,19 +203,18 @@ class QuanserEnv(gym.Env):
         # motor_acc = self._get_motor_acceleration(motor_angle_vel)
         # pend_acc = self._get_pend_acceleration(pendulum_angle_vel)
         pend_spin_num = (self.pend_init_count - self.pend_enc_val[0]) / 2048.0
-        observation_t = torch.tensor([motor_angle, pendulum_angle, motor_angle_vel, pendulum_angle_vel, pend_spin_num], dtype=torch.float32)
-        # observation_t = torch.tensor([math.sin(motor_angle), math.sin(pendulum_angle), math.cos(pendulum_angle), motor_angle_vel, pendulum_angle_vel, pend_spin_num], dtype=torch.float32)
+        # observation_t = torch.tensor([motor_angle, pendulum_angle, motor_angle_vel, pendulum_angle_vel, pend_spin_num], dtype=torch.float32)
+        observation_t = torch.tensor([motor_angle, math.sin(pendulum_angle), math.cos(pendulum_angle), motor_angle_vel, pendulum_angle_vel, pend_spin_num], dtype=torch.float32)
         return observation_t
 
     def noramlize_observation(self, observation):
         motor_angle_n = observation[0] / 1.8
-        pendulum_angle_n = observation[1] / (math.pi / 2.0)
-        motor_angle_vel_n = observation[2] / 20.0
-        pendulum_angle_vel_n = observation[3] / 40.0
+        motor_angle_vel_n = observation[3] / 20.0
+        pendulum_angle_vel_n = observation[4] / 40.0
         # motor_acc_n = observation[4] / 10.0
         # pendulum_acc_n = observation[5] / 20.0
-        pendulum_spin_num = observation[4] / 5.0
-        observation_n = torch.tensor([motor_angle_n, pendulum_angle_n, motor_angle_vel_n, pendulum_angle_vel_n, pendulum_spin_num], dtype=torch.float32)
+        pendulum_spin_num = observation[5] / 5.0
+        observation_n = torch.tensor([motor_angle_n, observation[1], observation[2], motor_angle_vel_n, pendulum_angle_vel_n, pendulum_spin_num], dtype=torch.float32)
         return observation_n
 
     def reset(self):
@@ -223,6 +224,7 @@ class QuanserEnv(gym.Env):
         self.prev_pend_angle = None
         self.prev_motor_vel = None
         self.prev_pend_vel = None
+        self.step_time = None
         self.last_action = 0.0
         self.omega_over_count = 0
         self.std_error = deque(maxlen=2000)
@@ -298,6 +300,7 @@ class QuanserEnv(gym.Env):
         self.card.write_other(self.led_channels, len(self.led_channels), red_led_values)
         self.prev_sign = None
         self.contiue_sign = 0
+        self.step_time = time.perf_counter()
         return obs
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, float, bool, bool, dict]:
@@ -306,11 +309,14 @@ class QuanserEnv(gym.Env):
         terminated = False
 
         # =========================ACT=========================
-        pwm = float(actions.item()) * self.action_scale
-        pwm_buf = array('d', [pwm])
-        self.card.write_pwm(self.pwm_ch, 1, pwm_buf)
+        # pwm = float(actions.item()) * self.action_scale
+        # pwm_buf = array('d', [pwm])
+        # self.card.write_pwm(self.pwm_ch, 1, pwm_buf)
         last_pwm = copy.deepcopy(self.last_action)
         self.last_action = actions.item()
+
+        # while (time.perf_counter() - self.step_time) > self.Ts:
+        #     time.sleep(0.0001)
 
         # print(pwm, end=' ')
 
@@ -328,16 +334,6 @@ class QuanserEnv(gym.Env):
 
         # self.prev_sign = current_sign
 
-        # wait for control period
-        # =====================================================
-        self.step_time = time.perf_counter()
-        while (time.perf_counter() - self.step_time) < self.Ts:
-            time.sleep(0.0001)
-
-        time_error = (time.perf_counter() - self.step_time) - self.Ts
-        self.std_error.append(time_error)
-        # =====================================================
-
         # read observations from hardware
         motor_angle = self._get_motor_angle()
         pend_angle = self._get_pendulum_angle()
@@ -346,8 +342,8 @@ class QuanserEnv(gym.Env):
         # motor_acc = self._get_motor_acceleration(next_omega)
         # pend_acc = self._get_pend_acceleration(gamma)
         pend_spin_num = (self.pend_init_count - self.pend_enc_val[0]) / 2048.0
-        next_obs = torch.tensor([motor_angle, pend_angle, next_omega, gamma, pend_spin_num], dtype=torch.float32)
-        # next_obs = torch.tensor([math.sin(motor_angle), math.sin(pend_angle), math.cos(pend_angle), next_omega, gamma, pend_spin_num], dtype=torch.float32)
+        # next_obs = torch.tensor([motor_angle, pend_angle, next_omega, gamma, pend_spin_num], dtype=torch.float32)
+        next_obs = torch.tensor([motor_angle, math.sin(pend_angle), math.cos(pend_angle), next_omega, gamma, pend_spin_num], dtype=torch.float32)
         next_obs = self.noramlize_observation(next_obs)
 
         # compute reward
@@ -359,16 +355,16 @@ class QuanserEnv(gym.Env):
 
         reward += 0.1
 
-        motor_angle_n = motor_angle / 1.8
-        motor_vel_n   = next_omega / 20.0
+        # motor_angle_n = motor_angle / 1.8
+        # motor_vel_n   = next_omega / 20.0
         
         # increase penalty
-        lambda_pos = self.motor_penalty_scheduler(0.05, 0.1, 150_000)
-        lambda_vel = self.motor_penalty_scheduler(0.01, 0.05, 150_000)
+        # lambda_pos = self.motor_penalty_scheduler(0.05, 0.1, 150_000)
+        # lambda_vel = self.motor_penalty_scheduler(0.01, 0.05, 150_000)
 
-        penalty = lambda_pos * (motor_angle_n**2) + lambda_vel * (motor_vel_n**2)
+        # penalty = lambda_pos * (motor_angle_n**2) + lambda_vel * (motor_vel_n**2)
 
-        reward -= penalty
+        # reward -= penalty
 
         # termination conditions
         if abs(pend_spin_num) > 5.0:
@@ -442,3 +438,8 @@ class QuanserEnv(gym.Env):
     def motor_penalty_scheduler(self, start, end, frac):
         t = min(1.0, max(0.0, self.time_steps / frac))
         return start + (end - start) * t
+    
+    def apply_action(self, actions):
+        pwm = float(actions.item()) * self.action_scale
+        pwm_buf = array('d', [pwm])
+        self.card.write_pwm(self.pwm_ch, 1, pwm_buf)

@@ -8,6 +8,7 @@ from quanser.hardware import HIL
 
 from actor_and_q_critic import MODEL_DIR, Actor
 from quanser_env import QuanserEnv
+import time
 
 card = HIL("qube_servo3_usb", "0")
 
@@ -25,6 +26,8 @@ def test(env: QuanserEnv, actor: Actor, num_episodes: int) -> None:
         while not done:
             episode_steps += 1
             action = actor.get_action(observation, exploration=False)
+            env.apply_action(action)
+            time.sleep(0.006)
 
             next_observation, reward, terminated, truncated, _ = env.step(action)
 
@@ -38,8 +41,9 @@ def test(env: QuanserEnv, actor: Actor, num_episodes: int) -> None:
 def main_play(num_episodes: int, env_name: str, sub_model_dir: str) -> None:
     env = QuanserEnv(card)
 
-    actor = Actor(n_features=5, n_actions=1)
-    model_params = torch.load(os.path.join(MODEL_DIR, sub_model_dir, "td3_quanser_3971.4_actor_20250808_191231.pth"))
+    actor = Actor(n_features=6, n_actions=1)
+    # model_params = torch.load(os.path.join(MODEL_DIR, sub_model_dir, "td3_quanser_3961.0_actor_20250815_004857.pth"))
+    model_params = torch.load("/home/hyoseok/src/link_quanser_pendulum/models/td3_quanser_4050.9_actor_20250818_233816.pth")
     actor.load_state_dict(model_params)
     actor.eval()
 
@@ -51,6 +55,6 @@ def main_play(num_episodes: int, env_name: str, sub_model_dir: str) -> None:
 if __name__ == "__main__":
     NUM_EPISODES = 30
     ENV_NAME = "quanser_actor"
-    SUB_MODEL_DIR = "td3_quanser_6ms_0.35scale"
+    SUB_MODEL_DIR = "best"
 
     main_play(num_episodes=NUM_EPISODES, env_name=ENV_NAME, sub_model_dir = SUB_MODEL_DIR)

@@ -1,6 +1,6 @@
 from collections import deque
 from quanser.hardware import HIL
-from array   import array
+from array import array
 import numpy as np
 card = HIL("qube_servo3_usb", "0")
 led_channels = np.array([11000, 11001, 11002], dtype=np.uint32)
@@ -75,18 +75,18 @@ class TD3:
         self.epsilon_decay = config["epsilon_decay"]
         self.training_start_steps = config["training_start_steps"]
 
-        self.actor = Actor(n_features=5, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (7,)
-        self.target_actor = Actor(n_features=5, n_actions=1)
+        self.actor = Actor(n_features=6, n_actions=1)  # n_features: (motor_angle, pendulum_angle, motor_ang_vel, pendulum_ang_vel, last_action), shape: (7,)
+        self.target_actor = Actor(n_features=6, n_actions=1)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
 
-        self.q_critic_1 = QCritic(n_features=5, n_actions=1)
-        self.target_q_critic_1 = QCritic(n_features=5, n_actions=1)
+        self.q_critic_1 = QCritic(n_features=6, n_actions=1)
+        self.target_q_critic_1 = QCritic(n_features=6, n_actions=1)
         self.target_q_critic_1.load_state_dict(self.q_critic_1.state_dict())
         self.q_critic_1_optimizer = optim.Adam(self.q_critic_1.parameters(), lr=self.learning_rate)
 
-        self.q_critic_2 = QCritic(n_features=5, n_actions=1)
-        self.target_q_critic_2 = QCritic(n_features=5, n_actions=1)
+        self.q_critic_2 = QCritic(n_features=6, n_actions=1)
+        self.target_q_critic_2 = QCritic(n_features=6, n_actions=1)
         self.target_q_critic_2.load_state_dict(self.q_critic_2.state_dict())
         self.q_critic_2_optimizer = optim.Adam(self.q_critic_2.parameters(), lr=self.learning_rate)
 
@@ -130,7 +130,6 @@ class TD3:
                     scale = 2.0
                 else:
                     scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
-                # scale = self.nosie_scale_scheduler.get_scale(self.time_steps)
                 # scale = 0.3
                 action = self.actor.get_action(observation, scale=scale, exploration=False)
                 if episode_steps % 5 == 0:
@@ -139,10 +138,27 @@ class TD3:
                 action = np.clip(action, a_min=-1.0, a_max=1.0)
                 action_list.append(action.item())
 
-                next_observation, reward, terminated, truncated, _ = self.env.step(action)
+                # if self.step_call_time is not None:
+                #     while (time.perf_counter() - self.step_call_time) < 0.004:
+                #         time.sleep(0.0001)
+                #     step_call_time_deque.append(time.perf_counter() - self.step_call_time - 0.004)
+
+                self.env.apply_action(action)
+
+                if self.time_steps > self.training_start_steps:
+                    for _ in range(2):
+                        policy_loss, critic_loss, mu_v = self.train()
+                        if policy_loss is not None:
+                            policy_loss_list.append(policy_loss)
+                            mu_v_list.append(mu_v)
+                        critic_loss_list.append(critic_loss)
+                
                 if self.step_call_time is not None:
-                    step_call_time_error = time.perf_counter() - self.step_call_time
-                    step_call_time_deque.append(step_call_time_error - 0.003)
+                    while (time.perf_counter() - self.step_call_time) < 0.006:
+                        time.sleep(0.0001)
+                    step_call_time_deque.append(time.perf_counter() - self.step_call_time - 0.006)
+                    
+                next_observation, reward, terminated, truncated, _ = self.env.step(action)
                 self.step_call_time = time.perf_counter()
 
                 episode_reward += reward
@@ -166,15 +182,6 @@ class TD3:
             if episode_reward > self.episode_reward_avg_solved - 300.0:
                 is_terminated = self.validate()
 
-            if self.time_steps >= self.training_start_steps:
-                iter_training_steps = np.max([episode_steps, 500])
-                for _ in range(iter_training_steps):
-                    policy_loss, critic_loss, mu_v = self.train()
-                    if policy_loss is not None:
-                        policy_loss_list.append(policy_loss)
-                        mu_v_list.append(mu_v)
-                    critic_loss_list.append(critic_loss)
-
             if n_episode % 50 == 0 and n_episode > 100:
                 from array import array
                 green_led_values = np.array([0.0, 1.0, 0.0], dtype=np.float64)
@@ -192,7 +199,7 @@ class TD3:
                     "\nmu_v Loss: {:>7.3f},".format(policy_loss_mean),
                     "\nCritic Loss: {:>7.3f},".format(critic_loss_mean),
                     "\nTraining Steps: {:5,}, ".format(self.training_time_steps),
-                    "\nTraining Time: {}, \n".format(time.strftime("%H:%M:%S", time.gmtime(time.time() - self.train_start_time))),
+                    # "\nTraining Time: {}, \n".format(time.strftime("%H:%M:%S", time.gmtime(time.time() - self.train_start_time))),
                     "\nEpisode Time: {}, \n".format(time.strftime("%H:%M:%S", time.gmtime(episode_time))),
                 )
                 print("####################################################################################")
@@ -270,7 +277,6 @@ class TD3:
         critic_loss_1 = F.mse_loss(target_values, q_values_1)
         self.q_critic_1_optimizer.zero_grad()
         critic_loss_1.backward()
-        tnn_utils.clip_grad_norm_(self.q_critic_1.parameters(), max_norm=1.0)
         self.q_critic_1_optimizer.step()
         self.soft_synchronize_models(
             source_model=self.q_critic_1, target_model=self.target_q_critic_1, tau=self.soft_update_tau
@@ -279,7 +285,6 @@ class TD3:
         critic_loss_2 = F.mse_loss(target_values, q_values_2)
         self.q_critic_2_optimizer.zero_grad()
         critic_loss_2.backward()
-        tnn_utils.clip_grad_norm_(self.q_critic_2.parameters(), max_norm=1.0)
         self.q_critic_2_optimizer.step()
         self.soft_synchronize_models(
             source_model=self.q_critic_2, target_model=self.target_q_critic_2, tau=self.soft_update_tau
@@ -300,7 +305,6 @@ class TD3:
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
-            tnn_utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
             self.actor_optimizer.step()
 
             for p in self.q_critic_1.parameters():
@@ -364,6 +368,10 @@ class TD3:
             while not done:
                 action = self.actor.get_action(observation, exploration=False)
 
+                self.env.apply_action(action)
+
+                time.sleep(0.006)
+
                 observation, reward, terminated, truncated, _ = self.env.step(action)
 
                 validation_episode_reward += reward
@@ -399,17 +407,17 @@ def main():
     config = {
         "env_name": "quanser",                              # 환경의 이름
         "max_num_episodes": 200_000,                        # 훈련을 위한 최대 에피소드 횟수
-        "batch_size": 256,                                  # 훈련시 배치에서 한번에 가져오는 랜덤 배치 사이즈
+        "batch_size": 128,                                  # 훈련시 배치에서 한번에 가져오는 랜덤 배치 사이즈
         "replay_buffer_size": 100_000,                    # 리플레이 버퍼 사이즈
-        "learning_rate": 0.0005,                            # 학습율
+        "learning_rate": 0.001,                            # 학습율
         "gamma": 0.999,                                      # 감가율
-        "soft_update_tau": 0.998,                           # td3 Soft Update Tau
+        "soft_update_tau": 0.995,                           # td3 Soft Update Tau
         "print_episode_interval": 1,                        # Episode 통계 출력에 관한 에피소드 간격
         "episode_reward_avg_solved": 4000.0,                   # 훈련 종료를 위한 테스트 에피소드 리워드의 Average
         "epsilon_start": 1.0,
         "epsilon_end": 0.05,
         "epsilon_decay": 100_000,
-        "training_start_steps": 256,
+        "training_start_steps": 128,
         "seed": 42
     }
     seed_everything(config["seed"])
