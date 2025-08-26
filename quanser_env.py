@@ -95,6 +95,8 @@ class QuanserEnv(gym.Env):
                                            high=np.array([1.0], dtype=np.float32),
                                            dtype=np.float32)
         
+        self.dqn_action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)  # 3 discrete actions
+        
         # zero encoder counts
         self.init_count = 0
         self.pend_init_count = 0
@@ -177,7 +179,7 @@ class QuanserEnv(gym.Env):
 
         while True:
             push_min_cnt += 1
-            self.card.write_pwm(self.pwm_ch, 1, array('d', [0.06]))  # min push
+            self.card.write_pwm(self.pwm_ch, 1, array('d', [0.05]))  # min push
             time.sleep(0.01)
             if push_min_cnt > 300:
                 self.card.read_encoder(self.motor_enc_ch, 1, self.motor_enc_val)
@@ -266,7 +268,7 @@ class QuanserEnv(gym.Env):
 
             # PD control
             duty = self.Kp * 2 * error_rad - self.Kd * omega
-            duty = max(min(duty, 0.03), -0.03)
+            duty = max(min(duty, 0.04), -0.04)
 
             self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
             time.sleep(0.005)
@@ -312,8 +314,8 @@ class QuanserEnv(gym.Env):
         # pwm = float(actions.item()) * self.action_scale
         # pwm_buf = array('d', [pwm])
         # self.card.write_pwm(self.pwm_ch, 1, pwm_buf)
-        last_pwm = copy.deepcopy(self.last_action)
-        self.last_action = actions.item()
+        # last_pwm = copy.deepcopy(self.last_action)
+        # self.last_action = actions.item()
 
         # while (time.perf_counter() - self.step_time) > self.Ts:
         #     time.sleep(0.0001)
@@ -443,3 +445,7 @@ class QuanserEnv(gym.Env):
         pwm = float(actions.item()) * self.action_scale
         pwm_buf = array('d', [pwm])
         self.card.write_pwm(self.pwm_ch, 1, pwm_buf)
+
+    def apply_action_dqn(self, actions):
+        pwm_buf = array('d', [actions])
+        self.card.write_pwm(self.pwm_ch, 1, pwm_buf)        
