@@ -266,7 +266,7 @@ class QuanserEnv(gym.Env):
 
             # PD control
             duty = self.Kp * 2 * error_rad - self.Kd * omega
-            duty = max(min(duty, 0.03), -0.03)
+            duty = max(min(duty, 0.04), -0.04)
 
             self.card.write_pwm(self.pwm_ch, 1, array('d', [duty]))
             time.sleep(0.005)

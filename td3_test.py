@@ -11,6 +11,7 @@ from quanser_env import QuanserEnv
 import time
 
 card = HIL("qube_servo3_usb", "0")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def test(env: QuanserEnv, actor: Actor, num_episodes: int) -> None:
     for i in range(num_episodes):
@@ -43,8 +44,9 @@ def main_play(num_episodes: int, env_name: str, sub_model_dir: str) -> None:
 
     actor = Actor(n_features=6, n_actions=1)
     # model_params = torch.load(os.path.join(MODEL_DIR, sub_model_dir, "td3_quanser_3961.0_actor_20250815_004857.pth"))
-    model_params = torch.load("/home/hyoseok/src/link_quanser_pendulum/models/td3_quanser_4050.9_actor_20250818_233816.pth")
+    model_params = torch.load("/home/link/src/link_quanser_pendulum/models/td3_quanser_6ms_0.35scale/td3_quanser_3971.4_actor_20250808_191231.pth", map_location=device)
     actor.load_state_dict(model_params)
+    actor.to(device)
     actor.eval()
 
     test(env, actor, num_episodes=num_episodes)
