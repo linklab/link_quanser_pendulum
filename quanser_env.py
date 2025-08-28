@@ -375,7 +375,7 @@ class QuanserEnv(gym.Env):
             # self._reset_pendulum_init_count()  # calibrate pendulum init count
             # print("calibrate pendulum init count...")
 
-        if abs(math.degrees(motor_angle)) > 90.0:
+        if abs(math.degrees(motor_angle)) > 100.0:
             print("MOTOR ANGLE OVER: ", math.degrees(motor_angle))
             terminated = True
             # self._reset_init_count()  # calibrate motor init count
