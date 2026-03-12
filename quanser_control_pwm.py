@@ -23,7 +23,7 @@ def test_pwm(card):
         card.write_digital(array('I',[0]),1,array('I',[1]))
 
         pwm_ch  = array('I',[0])
-        samples = 1.0
+        samples = 1000
         Ts      = 0.1        # 1 kHz 루프
         start = time.time()
         for k in range(samples):
@@ -110,8 +110,8 @@ def reset(card):
 def main():
     card = HIL("qube_servo3_usb", "0")
 
-    # test_pwm(card=card)  # -0.1, 0.1 duty 반복 제어 및 현재 모터 각도 출력
-    reset(card=card)
+    test_pwm(card=card)  # -0.1, 0.1 duty 반복 제어 및 현재 모터 각도 출력
+    # reset(card=card)
     card.close()
 if __name__ == "__main__":
     main()
